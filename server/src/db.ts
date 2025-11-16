@@ -24,7 +24,8 @@ db.serialize(() => {
         `CREATE TABLE IF NOT EXISTS users (
             id TEXT PRIMARY KEY,
             username TEXT NOT NULL,
-            avatar TEXT
+            avatar TEXT,
+            last_active DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         )`
     );
 
@@ -59,6 +60,22 @@ db.serialize(() => {
             }
         });
     };
+
+    safeAlter(
+        `ALTER TABLE users ADD COLUMN last_active DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`
+    );
+    db.run(
+        `UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE last_active IS NULL`,
+        (err) => {
+            if (
+                err &&
+                !err.message.includes('no such column') &&
+                !err.message.includes('no column named last_active')
+            ) {
+                console.error('Failed to backfill last_active column:', err.message);
+            }
+        }
+    );
 
     safeAlter(`ALTER TABLE matches ADD COLUMN teamA_score INTEGER NOT NULL DEFAULT 0`);
     safeAlter(`ALTER TABLE matches ADD COLUMN teamB_score INTEGER NOT NULL DEFAULT 0`);

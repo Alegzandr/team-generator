@@ -9,7 +9,7 @@
 -   **Momentum-aware balancing** – recent matches (last 4h) nudge a player’s effective skill up/down, helping the algorithm keep squads fresh. Fresh sessions start with zero momentum.
 -   **Drag-first team builder** – generate proposed teams, then drag players directly between columns (even to swap with a full roster). A fairness warning appears if skills drift too far apart.
 -   **Match scoring history** – saving a match records both team rosters and scores. Any entry can be edited or deleted, and the same modal is used to capture results everywhere.
--   **Localization + GDPR** – English/French toggle, cookie consent banner, and a “delete everything” endpoint keep the app compliant.
+-   **Localization + GDPR** – English/French toggle, cookie consent banner, “delete everything” endpoint, and automatic inactive-user pruning keep the app compliant.
 -   **Docker-ready** – one `docker compose up` brings up the API, client bundle, and reverse proxy.
 
 ## Tech Stack
@@ -39,6 +39,8 @@ JWT_SECRET=super-secret-value
 DATABASE_URL=./data/database.sqlite
 SESSION_SECRET=another-secret
 CLIENT_URL=http://localhost:5173
+GDPR_RETENTION_DAYS=90
+GDPR_RETENTION_CHECK_HOURS=24
 ```
 
 `client/.env`:
@@ -63,6 +65,12 @@ npm run dev
 
 -   API: `http://localhost:3000`
 -   UI: `http://localhost:5173`
+
+### GDPR data retention
+
+-   `GDPR_RETENTION_DAYS` (default **90**) controls when an inactive Discord account is purged along with its matches/players. Set to `0` or a negative value to disable automatic cleanup (not recommended).
+-   `GDPR_RETENTION_CHECK_HOURS` (default **24**) controls how often the cleanup job runs.
+-   Activity is refreshed on every authenticated API call, so active users are never deleted automatically.
 
 ## Docker
 
@@ -104,7 +112,7 @@ All non-OAuth routes expect `Authorization: Bearer <token>`.
 
 | Table     | Columns                                                                                 |
 | --------- | --------------------------------------------------------------------------------------- |
-| `users`   | `id`, `username`, `avatar`                                                              |
+| `users`   | `id`, `username`, `avatar`, `last_active`                                              |
 | `players` | `id`, `user_id`, `name`, `skill`                                                        |
 | `matches` | `id`, `user_id`, `teamA`, `teamB`, `teamA_score`, `teamB_score`, `winner`, `created_at` |
 
