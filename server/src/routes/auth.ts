@@ -4,11 +4,9 @@ import { generateToken } from '../auth/discordAuth';
 import { upsertUser } from '../services/userService';
 import dotenv from 'dotenv';
 import { tokenCookieOptions, TOKEN_COOKIE_NAME } from '../config/authCookies';
+import { CLIENT_URL } from '../config/environment';
 
 dotenv.config();
-
-const CLIENT_URL =
-    process.env.CLIENT_URL || process.env.DISCORD_CLIENT_URL || 'http://localhost:5173';
 
 const router = express.Router();
 

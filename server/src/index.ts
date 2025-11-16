@@ -11,13 +11,12 @@ import matchRoutes from './routes/matches';
 import userRoutes from './routes/user';
 import { startRetentionJob } from './services/retentionService';
 import './auth/discordAuth';
+import {
+    CLIENT_ORIGIN,
+    SESSION_COOKIE_SECURE,
+} from './config/environment';
 
 dotenv.config();
-
-const CLIENT_URL =
-    process.env.CLIENT_URL ||
-    process.env.DISCORD_CLIENT_URL ||
-    'http://localhost:5173';
 
 const MemoryStore = createMemoryStore(session);
 const sessionStore = new MemoryStore({
@@ -29,17 +28,14 @@ app.set('trust proxy', 1);
 
 app.use(
     cors({
-        origin: CLIENT_URL,
+        origin: CLIENT_ORIGIN,
         credentials: true,
     })
 );
 app.use(cookieParser());
 app.use(express.json());
 
-const sessionCookieSecure =
-    process.env.SESSION_COOKIE_SECURE === 'true' ||
-    process.env.NODE_ENV === 'production';
-const sessionCookieSameSite = sessionCookieSecure ? 'none' : 'lax';
+const sessionCookieSameSite = SESSION_COOKIE_SECURE ? 'none' : 'lax';
 
 app.use(
     session({
@@ -50,7 +46,7 @@ app.use(
         cookie: {
             maxAge: 10 * 60 * 1000,
             sameSite: sessionCookieSameSite,
-            secure: sessionCookieSecure,
+            secure: SESSION_COOKIE_SECURE,
         },
     })
 );
