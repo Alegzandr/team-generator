@@ -2,17 +2,27 @@ import { DragEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { useToast } from '../context/ToastContext';
-import type { Match, Player, TeamPlayer, TemporaryPlayer, Winner } from '../types';
+import { DEFAULT_GAME, GAME_TITLES, MAP_POOL, type GameTitle } from '../data/maps';
+import type {
+    MapPreferences,
+    Match,
+    Player,
+    TeamPlayer,
+    TemporaryPlayer,
+    Winner,
+} from '../types';
 import { TeamAssignment, balanceTeams, getTeamStats } from '../utils/teamBalancer';
 import SkillSelector from './SkillSelector';
 import MatchResultModal from './MatchResultModal';
 
 const API_URL = import.meta.env.VITE_API_URL || '';
 const MOMENTUM_WINDOW_MS = 1000 * 60 * 60 * 4;
+const MAP_REPEAT_WINDOW_MS = 1000 * 60 * 60 * 4;
 const MOMENTUM_STEP = 0.5;
 const FAIRNESS_THRESHOLD = 3;
 const DEFAULT_TEAM_NAMES = { teamA: 'Attackers', teamB: 'Defenders' };
 const DRAG_DATA_FORMAT = 'application/x-team-generator';
+const createDefaultMapPreferences = (): MapPreferences => ({ banned: {} });
 
 type DragPayload =
     | { type: 'team'; from: 'teamA' | 'teamB'; player: TeamPlayer }
@@ -74,11 +84,18 @@ const sanitizeTeam = (team: TeamPlayer[]) =>
         temporary: Boolean(temporary),
     }));
 
-const calculateMomentumMap = (matches: Match[]) => {
+const calculateMomentumMap = (
+    matches: Match[],
+    options?: { filterGame?: string | null }
+) => {
     const now = Date.now();
     const map: Record<string, number> = {};
+    const filterGame = options?.filterGame;
 
     matches.forEach((match) => {
+        if (filterGame && match.game !== filterGame) {
+            return;
+        }
         const playedAt = new Date(match.created_at).getTime();
         if (now - playedAt > MOMENTUM_WINDOW_MS) {
             return;
@@ -133,30 +150,53 @@ const Dashboard = () => {
     const [playersLoading, setPlayersLoading] = useState(false);
     const [matches, setMatches] = useState<Match[]>([]);
     const [matchesLoading, setMatchesLoading] = useState(false);
+    const [momentumEnabled, setMomentumEnabled] = useState(true);
+    const [mapSelectionEnabled, setMapSelectionEnabled] = useState(false);
+    const [selectedGame, setSelectedGame] = useState<GameTitle>(DEFAULT_GAME);
+    const [selectedMap, setSelectedMap] = useState<string | null>(null);
+    const [mapPreferences, setMapPreferences] = useState<MapPreferences>(createDefaultMapPreferences());
+    const [mapPreferencesLoading, setMapPreferencesLoading] = useState(false);
+    const [mapPreferencesSaving, setMapPreferencesSaving] = useState(false);
     const [temporaryPlayers, setTemporaryPlayers] = useState<TemporaryPlayer[]>([]);
     const [selectedPlayerIds, setSelectedPlayerIds] = useState<Set<number>>(new Set());
     const [selectedTemporaryIds, setSelectedTemporaryIds] = useState<Set<string>>(
         new Set()
     );
     const [playerName, setPlayerName] = useState('');
-    const [playerSkill, setPlayerSkill] = useState(3);
+    const [playerSkill, setPlayerSkill] = useState(5);
     const [tempName, setTempName] = useState('');
-    const [tempSkill, setTempSkill] = useState(3);
+    const [tempSkill, setTempSkill] = useState(5);
     const [playersPerTeam, setPlayersPerTeam] = useState(5);
     const [teamNames, setTeamNames] = useState(DEFAULT_TEAM_NAMES);
     const [teams, setTeams] = useState<TeamAssignment>({ teamA: [], teamB: [] });
     const [editingPlayerId, setEditingPlayerId] = useState<number | null>(null);
     const [editingName, setEditingName] = useState('');
-    const [editingSkill, setEditingSkill] = useState(3);
+    const [editingSkill, setEditingSkill] = useState(5);
     const [editingTempId, setEditingTempId] = useState<string | null>(null);
     const [editingTempName, setEditingTempName] = useState('');
-    const [editingTempSkill, setEditingTempSkill] = useState(3);
+    const [editingTempSkill, setEditingTempSkill] = useState(5);
     const [convertingTempIds, setConvertingTempIds] = useState<Set<string>>(new Set());
     const [resultModalOpen, setResultModalOpen] = useState(false);
     const [resultModalMode, setResultModalMode] = useState<'new' | 'edit'>('new');
     const [matchBeingEdited, setMatchBeingEdited] = useState<Match | null>(null);
 
-    const momentumMap = useMemo(() => calculateMomentumMap(matches), [matches]);
+    const activeMomentumGame = mapSelectionEnabled ? selectedGame : undefined;
+
+    const momentumMap = useMemo(
+        () =>
+            momentumEnabled
+                ? calculateMomentumMap(matches, { filterGame: activeMomentumGame })
+                : {},
+        [matches, momentumEnabled, activeMomentumGame]
+    );
+    const mapOptions = useMemo<string[]>(
+        () => [...(MAP_POOL[selectedGame] ?? [])],
+        [selectedGame]
+    );
+    const bannedInSelectedGame: string[] = mapPreferences.banned[selectedGame] ?? [];
+    const availableMapOptions = mapOptions.filter(
+        (map) => !bannedInSelectedGame.includes(map)
+    );
 
     const selectedPlayers: TeamPlayer[] = useMemo(() => {
         const saved = players
@@ -170,11 +210,34 @@ const Dashboard = () => {
         return [...saved, ...temps];
     }, [players, temporaryPlayers, selectedPlayerIds, selectedTemporaryIds, momentumMap]);
 
+    const recentMapByGame = useMemo(() => {
+        const now = Date.now();
+        return matches.reduce(
+            (acc, match) => {
+                if (!match.game || !match.map) {
+                    return acc;
+                }
+                const playedAt = new Date(match.created_at).getTime();
+                if (Number.isNaN(playedAt) || now - playedAt > MAP_REPEAT_WINDOW_MS) {
+                    return acc;
+                }
+                const existing = acc[match.game];
+                if (!existing || playedAt > existing.playedAt) {
+                    acc[match.game] = { map: match.map, playedAt };
+                }
+                return acc;
+            },
+            {} as Record<string, { map: string; playedAt: number }>
+        );
+    }, [matches]);
+
     const requiredPlayers = playersPerTeam * 2;
     const canGenerateTeams = selectedPlayers.length >= requiredPlayers;
     const teamsReady =
         teams.teamA.length === playersPerTeam && teams.teamB.length === playersPerTeam;
-    const canSaveMatch = teamsReady;
+    const mapUnavailable = mapSelectionEnabled && availableMapOptions.length === 0;
+    const mapReady = !mapSelectionEnabled || (!mapUnavailable && Boolean(selectedMap));
+    const canSaveMatch = teamsReady && mapReady;
     const fairnessDiff = teamsReady
         ? Math.abs(
               getTeamStats(teams.teamA).totalSkill - getTeamStats(teams.teamB).totalSkill
@@ -212,10 +275,143 @@ const Dashboard = () => {
         return (await response.json()) as T;
     };
 
+    const ensureMatchReady = () => {
+        if (!teamsReady) {
+            pushToast(
+                t('teams.notEnoughPlayers', {
+                    needed: Math.max(0, requiredPlayers - selectedPlayers.length),
+                }),
+                'error'
+            );
+            return false;
+        }
+        if (mapSelectionEnabled) {
+            if (mapUnavailable) {
+                pushToast(
+                    t('maps.noAvailableShort', { game: selectedGame }),
+                    'error'
+                );
+                return false;
+            }
+            if (!selectedMap) {
+                pushToast(t('maps.mapRequired'), 'error');
+                return false;
+            }
+        }
+        return true;
+    };
+
+    const allowedMapsForGame = (game: GameTitle): string[] => {
+        const pool = [...(MAP_POOL[game] ?? [])];
+        const banned: string[] = mapPreferences.banned[game] ?? [];
+        return pool.filter((map) => !banned.includes(map));
+    };
+
+    const pickMapForGame = (
+        game: GameTitle,
+        extraExclude: Array<string | null | undefined> = []
+    ) => {
+        const options = allowedMapsForGame(game);
+        if (!options.length) {
+            return null;
+        }
+        const exclusions = new Set<string>();
+        extraExclude.forEach((entry) => {
+            if (entry) {
+                exclusions.add(entry);
+            }
+        });
+        const lastPlayed = recentMapByGame[game]?.map;
+        if (lastPlayed) {
+            exclusions.add(lastPlayed);
+        }
+        const available = options.filter((map) => !exclusions.has(map));
+        const pool = available.length ? available : options;
+        const randomIndex = Math.floor(Math.random() * pool.length);
+        return pool[randomIndex] ?? null;
+    };
+
+    const handleRandomizeMap = () => {
+        if (!mapSelectionEnabled) {
+            setMapSelectionEnabled(true);
+        }
+        const next = pickMapForGame(selectedGame, [selectedMap]);
+        if (!next) {
+            pushToast(t('maps.noAvailableShort', { game: selectedGame }), 'error');
+            return;
+        }
+        setSelectedMap(next);
+    };
+
+    const toggleMapSelection = () => {
+        if (mapSelectionEnabled) {
+            setMapSelectionEnabled(false);
+            setSelectedMap(null);
+            return;
+        }
+        const nextMap = pickMapForGame(selectedGame);
+        if (!nextMap) {
+            pushToast(t('maps.noAvailableShort', { game: selectedGame }), 'error');
+        }
+        setSelectedMap(nextMap);
+        setMapSelectionEnabled(true);
+    };
+
+    const handleToggleMapBan = async (game: GameTitle, mapName: string) => {
+        const previousPreferences = mapPreferences;
+        const bannedSet = new Set(previousPreferences.banned[game] ?? []);
+        if (bannedSet.has(mapName)) {
+            bannedSet.delete(mapName);
+        } else {
+            bannedSet.add(mapName);
+        }
+        const nextBanned = { ...previousPreferences.banned };
+        const updatedList = Array.from(bannedSet);
+        if (updatedList.length) {
+            nextBanned[game] = updatedList;
+        } else {
+            delete nextBanned[game];
+        }
+        const nextPreferences: MapPreferences = { banned: nextBanned };
+        setMapPreferences(nextPreferences);
+        setMapPreferencesSaving(true);
+        try {
+            await apiRequest<MapPreferences>('/api/maps/preferences', {
+                method: 'PUT',
+                body: JSON.stringify(nextPreferences),
+            });
+        } catch (error) {
+            setMapPreferences(previousPreferences);
+            pushToast(t('feedback.error'), 'error');
+        } finally {
+            setMapPreferencesSaving(false);
+        }
+    };
+
+    const handleGameChange = (value: GameTitle) => {
+        setSelectedGame(value);
+        const allowed = allowedMapsForGame(value);
+        if (!mapSelectionEnabled) {
+            setSelectedMap((prev) => (prev && allowed.includes(prev) ? prev : null));
+            return;
+        }
+        if (selectedMap && allowed.includes(selectedMap)) {
+            return;
+        }
+        const next = pickMapForGame(value);
+        if (!next) {
+            pushToast(t('maps.noAvailableShort', { game: value }), 'error');
+        }
+        setSelectedMap(next);
+    };
+
     useEffect(() => {
         if (!user) {
             setPlayers([]);
             setMatches([]);
+            setMapPreferences(createDefaultMapPreferences());
+            setMapSelectionEnabled(false);
+            setSelectedMap(null);
             return;
         }
 
@@ -243,8 +439,21 @@ const Dashboard = () => {
             }
         };
 
+        const loadMapPreferences = async () => {
+            setMapPreferencesLoading(true);
+            try {
+                const data = await apiRequest<MapPreferences>('/api/maps/preferences');
+                setMapPreferences(data);
+            } catch {
+                setMapPreferences(createDefaultMapPreferences());
+            } finally {
+                setMapPreferencesLoading(false);
+            }
+        };
+
         loadPlayers();
         loadMatches();
+        loadMapPreferences();
     }, [user, t, pushToast]);
 
     useEffect(() => {
@@ -258,6 +467,20 @@ const Dashboard = () => {
             return next;
         });
     }, [players]);
+
+    useEffect(() => {
+        if (!mapSelectionEnabled) {
+            setSelectedMap(null);
+        }
+    }, [mapSelectionEnabled]);
+
+    useEffect(() => {
+        if (!mapSelectionEnabled || !selectedMap) return;
+        const bannedForGame = mapPreferences.banned[selectedGame] ?? [];
+        if (bannedForGame.includes(selectedMap)) {
+            setSelectedMap(null);
+        }
+    }, [mapSelectionEnabled, mapPreferences, selectedMap, selectedGame]);
 
     const togglePlayerSelection = (playerId: number) => {
         setSelectedPlayerIds((prev) => {
@@ -332,7 +555,7 @@ const Dashboard = () => {
             });
             setPlayers((prev) => [...prev, player]);
             setPlayerName('');
-            setPlayerSkill(3);
+            setPlayerSkill(5);
             pushToast(t('actions.addPlayer'), 'success');
         } catch (error) {
             pushToast(t('feedback.error'), 'error');
@@ -366,7 +589,7 @@ const Dashboard = () => {
     const cancelEditing = () => {
         setEditingPlayerId(null);
         setEditingName('');
-        setEditingSkill(3);
+        setEditingSkill(5);
     };
 
     const handleUpdatePlayer = async (event: FormEvent) => {
@@ -399,7 +622,7 @@ const Dashboard = () => {
     const cancelTempEditing = () => {
         setEditingTempId(null);
         setEditingTempName('');
-        setEditingTempSkill(3);
+        setEditingTempSkill(5);
     };
 
     const handleUpdateTemporaryPlayer = (event: FormEvent) => {
@@ -426,7 +649,7 @@ const Dashboard = () => {
         };
         setTemporaryPlayers((prev) => [...prev, newPlayer]);
         setTempName('');
-        setTempSkill(3);
+        setTempSkill(5);
     };
 
     const handleRemoveTemporaryPlayer = (playerId: string) => {
@@ -645,8 +868,7 @@ const Dashboard = () => {
     };
 
     const handleSaveMatch = async (scores: { teamA: number; teamB: number }) => {
-        if (!canSaveMatch) {
-            pushToast(t('teams.notEnoughPlayers', { needed: 0 }), 'error');
+        if (!ensureMatchReady()) {
             return;
         }
 
@@ -658,6 +880,8 @@ const Dashboard = () => {
                     teamB: sanitizeTeam(teams.teamB),
                     teamA_score: scores.teamA,
                     teamB_score: scores.teamB,
+                    game: mapSelectionEnabled ? selectedGame : null,
+                    map: mapSelectionEnabled ? selectedMap : null,
                 }),
             });
             setMatches((prev) => [match, ...prev]);
@@ -726,8 +950,7 @@ const Dashboard = () => {
     };
 
     const openResultModal = () => {
-        if (!canSaveMatch) {
-            pushToast(t('teams.notEnoughPlayers', { needed: 0 }), 'error');
+        if (!ensureMatchReady()) {
             return;
         }
         setResultModalMode('new');
@@ -766,18 +989,18 @@ const Dashboard = () => {
         const stats = getTeamStats(teams[teamKey]);
         return (
             <div
-                className="rounded-2xl border border-slate-200 bg-white/80 p-4 shadow dark:border-slate-700 dark:bg-slate-900/80"
+                className="valorant-card border-white/20 bg-white/10 text-white"
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => handleDropOnTeam(e, teamKey)}
             >
                 <div className="flex items-center justify-between">
                     <div>
-                        <p className="text-sm text-slate-500 dark:text-slate-400">{label}</p>
-                        <h3 className="text-xl font-semibold text-slate-900 dark:text-white">
+                        <p className="text-xs tracking-[0.15em] text-slate-200">{label}</p>
+                        <h3 className="text-xl font-semibold text-white">
                             {teamNames[teamKey]}
                         </h3>
                     </div>
-                    <div className="text-right text-sm text-slate-500 dark:text-slate-400">
+                    <div className="text-right text-sm text-slate-100">
                         <p>
                             {t('teams.average')}: {stats.averageSkill}
                         </p>
@@ -786,7 +1009,9 @@ const Dashboard = () => {
                         </p>
                     </div>
                 </div>
-                <p className="mt-2 text-xs text-slate-500 dark:text-slate-500">{t('teams.manualMove')}</p>
+                <p className="mt-2 text-xs tracking-[0.12em] text-slate-200">
+                    {t('teams.manualMove')}
+                </p>
                 <div className="mt-3 flex flex-col gap-2">
                     {teams[teamKey].map((player) => (
                         <button
@@ -797,29 +1022,25 @@ const Dashboard = () => {
                             onDragOver={(e) => e.preventDefault()}
                             onDrop={(e) => handleDropOnTeam(e, teamKey, player)}
                             onClick={() => handleManualMove(player, teamKey)}
-                            className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-4 py-2 text-left transition hover:border-indigo-200 hover:bg-indigo-50 dark:border-slate-700 dark:bg-slate-800/60 dark:hover:border-indigo-400 dark:hover:bg-slate-800"
+                            className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left transition hover:border-[#ff4655]/70 hover:bg-[#ff4655]/10"
                         >
                             <div>
-                                <p className="font-medium text-slate-800 dark:text-slate-100">
-                                    {player.name}
-                                </p>
+                                <p className="font-semibold text-white">{player.name}</p>
                                 {typeof player.momentum === 'number' && player.momentum !== 0 && (
-                                    <span className="text-xs text-indigo-600">
+                                    <span className="text-xs text-cyan-300">
                                         {t('players.momentumLabel')}:{' '}
                                         {player.momentum > 0 ? '+' : ''}
                                         {player.momentum}
                                     </span>
                                 )}
                             </div>
-                            <span className="text-sm font-semibold text-slate-600 dark:text-slate-200">
+                            <span className="text-sm font-semibold text-cyan-200">
                                 {player.effectiveSkill ?? player.skill}
                             </span>
                         </button>
                     ))}
                     {teams[teamKey].length === 0 && (
-                        <p className="text-sm text-slate-400 dark:text-slate-500">
-                            {t('teams.empty')}
-                        </p>
+                        <p className="text-sm text-slate-200">{t('teams.empty')}</p>
                     )}
                 </div>
             </div>
@@ -827,76 +1048,42 @@ const Dashboard = () => {
     };
 
     return (
-        <div className="mx-auto flex max-w-6xl flex-col gap-8 px-4 py-10 text-slate-900 dark:text-slate-100">
-            <header className="rounded-3xl border border-slate-200 bg-white/70 p-6 shadow dark:border-slate-700 dark:bg-slate-900/70">
+        <div className="app-shell flex flex-col gap-10 py-12 text-white">
+            <header className="valorant-panel valorant-panel--glow sticky top-4 z-10 border border-white/10 backdrop-blur supports-[backdrop-filter]:bg-white/5 shadow-[0_10px_30px_rgba(5,6,15,0.45)]">
                 <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                     <div className="flex items-center gap-3">
                         {user?.avatar ? (
                             <img
                                 src={`https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png`}
                                 alt={user.username}
-                                className="h-12 w-12 rounded-full border border-slate-200 dark:border-slate-600"
+                                className="h-12 w-12 rounded-full border border-white/15"
                             />
                         ) : (
-                            <div className="h-12 w-12 rounded-full bg-slate-200 dark:bg-slate-700" />
+                            <div className="h-12 w-12 rounded-full bg-white/10" />
                         )}
                         <div>
-                            <p className="text-sm text-slate-500 dark:text-slate-400">
+                            <p className="text-xs tracking-[0.15em] text-slate-200">
                                 {t('app.title')}
                             </p>
-                            <p className="text-xl font-semibold text-slate-900 dark:text-white">
-                                {user?.username}
-                            </p>
+                            <p className="text-xl font-semibold text-white">{user?.username}</p>
                         </div>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-3">
-                        <div className="flex items-center gap-1">
-                            <span className="text-sm text-slate-500 dark:text-slate-400">
-                                {t('language.label')}
-                            </span>
-                            {(['en', 'fr'] as const).map((lang) => (
-                                <button
-                                    key={lang}
-                                    onClick={() => setLanguage(lang)}
-                                    className={`rounded-full px-3 py-1 text-sm font-semibold ${
-                                        language === lang
-                                            ? 'bg-indigo-600 text-white'
-                                            : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-200'
-                                    }`}
-                                >
-                                    {lang.toUpperCase()}
-                                </button>
-                            ))}
-                        </div>
-                        <button
-                            onClick={() => logout()}
-                            className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 transition hover:border-slate-300 dark:border-slate-600 dark:text-slate-200 dark:hover:border-slate-500"
-                        >
-                            {t('actions.logout')}
-                        </button>
-                        <button
-                            onClick={handleDeleteAccount}
-                            className="rounded-full border border-red-200 px-4 py-2 text-sm font-semibold text-red-600 transition hover:border-red-300 dark:border-red-700 dark:text-red-300 dark:hover:border-red-600"
-                        >
-                            {t('actions.deleteAccount')}
-                        </button>
                     </div>
                 </div>
             </header>
 
             <div className="grid gap-6 lg:grid-cols-2">
-                <section className="flex flex-col gap-6 rounded-3xl border border-slate-200 bg-white/70 p-6 shadow dark:border-slate-700 dark:bg-slate-900/70">
+                <section className="valorant-panel flex flex-col gap-6">
                     <div className="flex items-center justify-between">
                         <div>
-                            <h2 className="text-xl font-semibold text-slate-900 dark:text-white">
+                            <h2 className="text-xl font-semibold text-white">
                                 {t('players.title')}
                             </h2>
-                            <p className="text-sm text-slate-500 dark:text-slate-400">
+                            <p className="text-sm text-slate-100">
                                 {t('players.selectHelp')}
                             </p>
                         </div>
                         <button
-                            className="text-xs font-semibold text-indigo-600 disabled:text-slate-400"
+                            className="text-xs font-semibold tracking-[0.12em] text-cyan-300 disabled:text-slate-500"
                             disabled={!players.length}
                             onClick={toggleAllSavedSelections}
                         >
@@ -908,18 +1095,18 @@ const Dashboard = () => {
 
                     <form onSubmit={handleAddPlayer} className="flex flex-col gap-3">
                         <div>
-                            <label className="text-sm font-medium text-slate-600 dark:text-slate-300">
+                            <label className="text-xs tracking-[0.12em] text-slate-200">
                                 {t('players.nameLabel')}
                             </label>
                             <input
-                                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                                className="valorant-input mt-1 w-full"
                                 placeholder={t('players.namePlaceholder')}
                                 value={playerName}
                                 onChange={(e) => setPlayerName(e.target.value)}
                             />
                         </div>
                         <div>
-                            <label className="text-sm font-medium text-slate-600 dark:text-slate-300">
+                            <label className="text-xs tracking-[0.12em] text-slate-200">
                                 {t('players.skillLabel')}
                             </label>
                             <div className="mt-2">
@@ -929,31 +1116,31 @@ const Dashboard = () => {
                                     onChange={setPlayerSkill}
                                 />
                             </div>
-                            <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                            <p className="mt-1 text-xs text-slate-200">
                                 {t('players.skillHelp')}
                             </p>
                         </div>
                         <button
                             type="submit"
                             disabled={!playerName.trim()}
-                            className="rounded-xl bg-indigo-600 px-4 py-2 font-semibold text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 dark:disabled:bg-slate-700 dark:disabled:text-slate-400"
+                            className="valorant-btn-primary w-full justify-center px-6 py-3 text-xs disabled:cursor-not-allowed disabled:opacity-60"
                         >
                             {t('actions.addPlayer')}
                         </button>
                     </form>
 
-                        <div
-                            className="max-h-64 space-y-2 overflow-auto pr-2"
+                    <div
+                        className="max-h-64 space-y-2 overflow-auto pr-2"
                         onDragOver={(e) => e.preventDefault()}
                         onDrop={(e) => handleSavedDrop(e)}
                     >
                         {playersLoading && (
-                            <p className="text-sm text-slate-500 dark:text-slate-400">
+                            <p className="text-sm text-slate-200">
                                 {t('loading.players')}
                             </p>
                         )}
                         {!playersLoading && players.length === 0 && (
-                            <p className="text-sm text-slate-500 dark:text-slate-400">
+                            <p className="text-sm text-slate-200">
                                 {t('players.empty')}
                             </p>
                         )}
@@ -965,10 +1152,10 @@ const Dashboard = () => {
                             return (
                                 <div
                                     key={player.id}
-                                    className={`rounded-2xl border px-3 py-3 ${
+                                    className={`rounded-2xl border px-4 py-3 transition ${
                                         selected
-                                            ? 'border-indigo-200 bg-indigo-50 dark:border-indigo-500 dark:bg-indigo-500/20'
-                                            : 'border-slate-100 bg-white dark:border-slate-700 dark:bg-slate-800/60'
+                                            ? 'border-[#ff4655]/60 bg-[#ff4655]/12'
+                                            : 'border-white/15 bg-white/10 hover:border-white/35'
                                     }`}
                                     draggable
                                     onDragStart={(e) =>
@@ -983,7 +1170,7 @@ const Dashboard = () => {
                                             className="flex flex-col gap-2"
                                         >
                                             <input
-                                                className="rounded-xl border border-slate-200 px-2 py-1 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                                                className="valorant-input px-3 py-2 text-sm"
                                                 value={editingName}
                                                 onChange={(e) => setEditingName(e.target.value)}
                                             />
@@ -996,7 +1183,7 @@ const Dashboard = () => {
                                             <div className="flex gap-2">
                                                 <button
                                                     type="submit"
-                                                    className="rounded-xl bg-indigo-600 px-3 py-1 text-xs font-semibold text-white disabled:bg-slate-200 dark:disabled:bg-slate-700"
+                                                    className="valorant-btn-primary px-4 py-2 text-[0.6rem] disabled:opacity-60"
                                                     disabled={!editingName.trim()}
                                                 >
                                                     {t('actions.saveChanges')}
@@ -1004,7 +1191,7 @@ const Dashboard = () => {
                                                 <button
                                                     type="button"
                                                     onClick={cancelEditing}
-                                                    className="rounded-xl border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 dark:border-slate-600 dark:text-slate-200"
+                                                    className="valorant-btn-outline px-4 py-2 text-[0.6rem]"
                                                 >
                                                     {t('actions.cancel')}
                                                 </button>
@@ -1013,7 +1200,7 @@ const Dashboard = () => {
                                     ) : (
                                         <div className="flex items-center justify-between">
                                             <div>
-                                                <label className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+                                                <label className="flex items-center gap-2 text-sm font-semibold text-white">
                                                     <input
                                                         type="checkbox"
                                                         checked={selected}
@@ -1021,12 +1208,12 @@ const Dashboard = () => {
                                                     />
                                                     {player.name}
                                                 </label>
-                                                <p className="text-xs text-slate-400 dark:text-slate-500">
+                                                <p className="text-xs text-slate-200">
                                                     {t('players.skillLabel')}: {player.skill}
                                                 </p>
                                                 {showMomentum && (
                                                     <p
-                                                        className="text-xs text-indigo-600"
+                                                        className="text-xs text-cyan-300"
                                                         title={t('players.momentumTooltip')}
                                                     >
                                                         {t('players.momentumLabel')}:{' '}
@@ -1035,16 +1222,16 @@ const Dashboard = () => {
                                                     </p>
                                                 )}
                                             </div>
-                                            <div className="flex gap-2 text-xs font-semibold">
+                                            <div className="flex gap-2 text-xs font-semibold tracking-[0.12em]">
                                                 <button
                                                     onClick={() => startEditingPlayer(player)}
-                                                    className="text-indigo-600"
+                                                    className="text-cyan-300"
                                                 >
                                                     {t('actions.edit')}
                                                 </button>
                                                 <button
                                                     onClick={() => handleDeletePlayer(player.id)}
-                                                    className="text-red-500"
+                                                    className="text-[#ff4655]"
                                                 >
                                                     {t('actions.remove')}
                                                 </button>
@@ -1058,13 +1245,13 @@ const Dashboard = () => {
 
                     <div>
                         <div className="flex items-center justify-between">
-                            <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+                            <h3 className="text-lg font-semibold text-white">
                                 {t('players.temporaryTitle')}
                             </h3>
                             <button
                                 onClick={toggleAllTemporarySelections}
                                 disabled={!temporaryPlayers.length}
-                                className="text-xs font-semibold text-indigo-600 disabled:text-slate-400"
+                                className="text-xs font-semibold tracking-[0.12em] text-cyan-300 disabled:text-slate-500"
                             >
                                 {temporaryPlayers.length > 0 &&
                                 selectedTemporaryIds.size === temporaryPlayers.length
@@ -1072,7 +1259,7 @@ const Dashboard = () => {
                                     : t('actions.selectAll')}
                             </button>
                         </div>
-                        <p className="text-sm text-slate-500 dark:text-slate-400">
+                        <p className="text-sm text-slate-200">
                             {t('players.temporaryHelp')}
                         </p>
                         <form
@@ -1080,7 +1267,7 @@ const Dashboard = () => {
                             className="mt-3 flex flex-col gap-3"
                         >
                             <input
-                                className="rounded-xl border border-slate-200 px-3 py-2 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                                className="valorant-input"
                                 placeholder={t('players.namePlaceholder')}
                                 value={tempName}
                                 onChange={(e) => setTempName(e.target.value)}
@@ -1093,7 +1280,7 @@ const Dashboard = () => {
                             <button
                                 type="submit"
                                 disabled={!tempName.trim()}
-                                className="rounded-xl border border-dashed border-indigo-300 px-4 py-2 text-sm font-semibold text-indigo-600 disabled:border-slate-200 disabled:text-slate-500 dark:border-indigo-500 dark:disabled:border-slate-600 dark:disabled:text-slate-400"
+                                className="valorant-btn-outline border-dashed border-white/40 text-xs text-white disabled:opacity-60"
                             >
                                 {t('actions.addTemporary')}
                             </button>
@@ -1108,10 +1295,10 @@ const Dashboard = () => {
                                 return (
                                     <div
                                         key={player.id}
-                                        className={`flex items-center justify-between rounded-2xl border px-3 py-2 ${
+                                        className={`flex items-center justify-between rounded-2xl border px-4 py-2 transition ${
                                             selected
-                                                ? 'border-indigo-200 bg-indigo-50 dark:border-indigo-500 dark:bg-indigo-500/20'
-                                                : 'border-slate-100 bg-white dark:border-slate-700 dark:bg-slate-800/60'
+                                                ? 'border-[#ff4655]/60 bg-[#ff4655]/12'
+                                                : 'border-white/15 bg-white/10 hover:border-white/35'
                                         }`}
                                         draggable
                                         onDragStart={(e) =>
@@ -1130,7 +1317,7 @@ const Dashboard = () => {
                                                 className="flex w-full flex-col gap-2"
                                             >
                                                 <input
-                                                    className="rounded-xl border border-slate-200 px-2 py-1 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                                                    className="valorant-input px-3 py-2 text-sm"
                                                     value={editingTempName}
                                                     onChange={(e) => setEditingTempName(e.target.value)}
                                                 />
@@ -1143,7 +1330,7 @@ const Dashboard = () => {
                                                 <div className="flex gap-2">
                                                     <button
                                                         type="submit"
-                                                        className="rounded-xl bg-indigo-600 px-3 py-1 text-xs font-semibold text-white disabled:bg-slate-200 dark:disabled:bg-slate-700"
+                                                        className="valorant-btn-primary px-4 py-2 text-[0.6rem] disabled:opacity-60"
                                                         disabled={!editingTempName.trim()}
                                                     >
                                                         {t('actions.saveChanges')}
@@ -1151,7 +1338,7 @@ const Dashboard = () => {
                                                     <button
                                                         type="button"
                                                         onClick={cancelTempEditing}
-                                                        className="rounded-xl border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 dark:border-slate-600 dark:text-slate-200"
+                                                        className="valorant-btn-outline px-4 py-2 text-[0.6rem]"
                                                     >
                                                         {t('actions.cancel')}
                                                     </button>
@@ -1160,7 +1347,7 @@ const Dashboard = () => {
                                         ) : (
                                             <>
                                                 <div>
-                                                <label className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+                                                    <label className="flex items-center gap-2 text-sm font-semibold text-white">
                                                         <input
                                                             type="checkbox"
                                                             checked={selected}
@@ -1170,20 +1357,20 @@ const Dashboard = () => {
                                                         />
                                                         {player.name}
                                                     </label>
-                                                    <p className="text-xs text-slate-400 dark:text-slate-500">
+                                                    <p className="text-xs text-slate-200">
                                                         {t('players.skillLabel')}: {player.skill}
                                                     </p>
                                                 </div>
-                                                <div className="flex gap-2 text-xs font-semibold">
+                                                <div className="flex gap-2 text-xs font-semibold tracking-[0.12em]">
                                                     <button
                                                         onClick={() => startEditingTempPlayer(player)}
-                                                        className="text-indigo-600"
+                                                        className="text-cyan-300"
                                                     >
                                                         {t('actions.edit')}
                                                     </button>
                                                     <button
                                                         onClick={() => handleRemoveTemporaryPlayer(player.id)}
-                                                        className="text-red-500"
+                                                        className="text-[#ff4655]"
                                                     >
                                                         {t('actions.remove')}
                                                     </button>
@@ -1197,19 +1384,19 @@ const Dashboard = () => {
                     </div>
                 </section>
 
-                <section className="flex flex-col gap-6 rounded-3xl border border-slate-200 bg-white/70 p-6 shadow dark:border-slate-700 dark:bg-slate-900/70">
+                <section className="valorant-panel flex flex-col gap-6">
                     <div>
-                        <h2 className="text-xl font-semibold text-slate-900 dark:text-white">
+                        <h2 className="text-xl font-semibold text-white">
                             {t('teams.title')}
                         </h2>
-                        <p className="text-sm text-slate-500 dark:text-slate-400">
+                        <p className="text-sm text-slate-100">
                             {t('teams.balanceInfo')}
                         </p>
                     </div>
 
                     <div className="grid gap-4 md:grid-cols-2">
                         <div>
-                            <label className="text-sm font-medium text-slate-600 dark:text-slate-300">
+                            <label className="text-xs tracking-[0.12em] text-slate-200">
                                 {t('teams.playersPerTeam')}
                             </label>
                             <input
@@ -1221,16 +1408,16 @@ const Dashboard = () => {
                                     setPlayersPerTeam(value);
                                     setTeams({ teamA: [], teamB: [] });
                                 }}
-                                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                                className="valorant-input mt-1 w-full"
                             />
-                            <p className="text-xs text-slate-400 dark:text-slate-500">
+                            <p className="text-xs text-slate-200">
                                 {t('teams.playersPerTeamHelp')}
                             </p>
                         </div>
                         <div className="flex flex-col gap-2">
                             {(['teamA', 'teamB'] as const).map((teamKey) => (
                                 <div key={teamKey}>
-                                    <label className="text-sm font-medium text-slate-600 dark:text-slate-300">
+                                    <label className="text-xs tracking-[0.12em] text-slate-200">
                                         {t('teams.teamName')} (
                                         {teamKey === 'teamA' ? t('teams.teamA') : t('teams.teamB')})
                                     </label>
@@ -1242,21 +1429,21 @@ const Dashboard = () => {
                                                 [teamKey]: e.target.value,
                                             }))
                                         }
-                                        className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                                        className="valorant-input mt-1 w-full"
                                     />
                                 </div>
                             ))}
                         </div>
                     </div>
 
-                    <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/60">
-                        <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                    <div className="valorant-card border-white/10 bg-white/5">
+                        <p className="text-sm font-semibold text-white">
                             {t('players.selectedCount', {
                                 count: selectedPlayers.length,
                             })}
                         </p>
                         {!canGenerateTeams && (
-                            <p className="text-sm text-red-500">
+                            <p className="text-sm text-[#ff9aa4]">
                                 {t('teams.notEnoughPlayers', {
                                     needed: Math.max(0, requiredPlayers - selectedPlayers.length),
                                 })}
@@ -1268,14 +1455,14 @@ const Dashboard = () => {
                         <button
                             onClick={handleGenerateTeams}
                             disabled={!canGenerateTeams}
-                            className="rounded-2xl bg-indigo-600 px-4 py-2 font-semibold text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 dark:disabled:bg-slate-700 dark:disabled:text-slate-400"
+                            className="valorant-btn-primary px-6 py-3 text-xs disabled:cursor-not-allowed disabled:opacity-60"
                         >
                             {t('actions.generateTeams')}
                         </button>
                         <button
                             onClick={handleRerollTeams}
                             disabled={!teamsReady}
-                            className="rounded-2xl border border-slate-200 px-4 py-2 font-semibold text-slate-600 transition hover:border-indigo-200 hover:text-indigo-600 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400 dark:border-slate-600 dark:text-slate-200 dark:hover:border-indigo-400 dark:hover:text-indigo-300 dark:disabled:border-slate-600 dark:disabled:text-slate-500"
+                            className="valorant-btn-outline px-6 py-3 text-xs disabled:cursor-not-allowed disabled:opacity-60"
                         >
                             {t('actions.reroll')}
                         </button>
@@ -1287,21 +1474,220 @@ const Dashboard = () => {
                     </div>
 
                     {fairnessWarning && (
-                        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-400 dark:bg-amber-900/40 dark:text-amber-200">
+                        <div className="rounded-2xl border border-[#ff4655]/40 bg-[#ff4655]/10 p-4 text-sm text-white">
                             {t('teams.fairnessWarning', {
                                 diff: fairnessDiff.toFixed(1),
                             })}
                         </div>
                     )}
 
-                    <div className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/60">
-                        <p className="text-sm font-semibold text-slate-600 dark:text-slate-200">
-                            {t('actions.scoreMatch')}
-                        </p>
+                    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                            <div>
+                                <p className="text-xs tracking-[0.15em] text-slate-200">
+                                    {t('players.momentumToggleLabel')}
+                                </p>
+                                <p className="text-sm text-slate-200">
+                                    {momentumEnabled
+                                        ? mapSelectionEnabled
+                                            ? t('players.momentumFiltered', { game: selectedGame })
+                                            : t('players.momentumEnabled')
+                                        : t('players.momentumDisabled')}
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setMomentumEnabled((prev) => !prev)}
+                                className={`rounded-full border px-4 py-2 text-xs font-semibold tracking-[0.12em] transition ${
+                                    momentumEnabled
+                                        ? 'border-[#ff5c8a]/40 bg-[#ff5c8a]/20 text-white shadow-[0_4px_16px_rgba(255,92,138,0.25)]'
+                                        : 'border-white/15 bg-white/5 text-slate-200 hover:border-white/40 hover:text-white'
+                                }`}
+                            >
+                                {momentumEnabled
+                                    ? t('players.momentumDisable')
+                                    : t('players.momentumEnable')}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                            <div>
+                                <p className="text-xs tracking-[0.15em] text-slate-200">
+                                    {t('maps.title')}
+                                </p>
+                                <p className="text-sm text-slate-200">
+                                    {t('maps.description')}
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={toggleMapSelection}
+                                className="valorant-btn-outline px-4 py-2 text-xs"
+                            >
+                                {mapSelectionEnabled ? t('maps.disable') : t('maps.enable')}
+                            </button>
+                        </div>
+                        {mapSelectionEnabled ? (
+                            <div className="mt-4 space-y-3">
+                                <div>
+                                    <label className="text-xs tracking-[0.12em] text-slate-200">
+                                        {t('maps.gameLabel')}
+                                    </label>
+                                    <select
+                                        className="valorant-input mt-1 w-full"
+                                        value={selectedGame}
+                                        onChange={(e) =>
+                                            handleGameChange(e.target.value as GameTitle)
+                                        }
+                                    >
+                                        {GAME_TITLES.map((game) => (
+                                            <option key={game} value={game}>
+                                                {game}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                                {mapOptions.length > 0 ? (
+                                    <>
+                                        <div>
+                                            <label className="text-xs tracking-[0.12em] text-slate-200">
+                                                {t('maps.mapLabel')}
+                                            </label>
+                                            <select
+                                                className="valorant-input mt-1 w-full"
+                                                value={selectedMap ?? ''}
+                                                disabled={!availableMapOptions.length}
+                                                onChange={(e) =>
+                                                    setSelectedMap(e.target.value || null)
+                                                }
+                                            >
+                                                <option value="">
+                                                    {availableMapOptions.length
+                                                        ? t('maps.selectPlaceholder')
+                                                        : t('maps.noAvailableShort', {
+                                                              game: selectedGame,
+                                                          })}
+                                                </option>
+                                                {availableMapOptions.map((mapName) => (
+                                                    <option key={mapName} value={mapName}>
+                                                        {mapName}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <div className="flex flex-wrap items-center gap-3">
+                                            <button
+                                                type="button"
+                                                onClick={handleRandomizeMap}
+                                                disabled={!availableMapOptions.length}
+                                                className="valorant-btn-outline px-4 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                {t('maps.randomize')}
+                                            </button>
+                                            {recentMapByGame[selectedGame]?.map && (
+                                                <p className="text-xs text-slate-300">
+                                                    {t('maps.recentlyPlayed', {
+                                                        map: recentMapByGame[selectedGame]!.map,
+                                                    })}
+                                                </p>
+                                            )}
+                                        </div>
+                                        <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                                            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                                                <p className="text-xs tracking-[0.12em] text-slate-200">
+                                                    {t('maps.manageTitle', { game: selectedGame })}
+                                                </p>
+                                                {mapPreferencesSaving && (
+                                                    <span className="text-[0.65rem] uppercase tracking-[0.12em] text-slate-300">
+                                                        {t('maps.saving')}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            {mapPreferencesLoading ? (
+                                                <p className="mt-2 text-sm text-slate-200">
+                                                    {t('maps.loadingPreferences')}
+                                                </p>
+                                            ) : (
+                                                <div className="mt-2 flex flex-wrap gap-2">
+                                                    {mapOptions.map((mapName) => {
+                                                        const banned = bannedInSelectedGame.includes(mapName);
+                                                        return (
+                                                            <button
+                                                                type="button"
+                                                                key={mapName}
+                                                                disabled={mapPreferencesSaving}
+                                                                onClick={() =>
+                                                                    handleToggleMapBan(selectedGame, mapName)
+                                                                }
+                                                                className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                                                                    banned
+                                                                        ? 'border-[#ff4655]/60 bg-[#ff4655]/10 text-[#ff9aa4]'
+                                                                        : 'border-white/20 text-white hover:border-white/60'
+                                                                }`}
+                                                            >
+                                                                {mapName}
+                                                                <span className="ml-2 text-[0.6rem] uppercase tracking-[0.12em] text-slate-300">
+                                                                    {banned
+                                                                        ? t('maps.tagBanned')
+                                                                        : t('maps.tagAllowed')}
+                                                                </span>
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
+                                            <p className="mt-2 text-xs text-slate-400">
+                                                {t('maps.banHint')}
+                                            </p>
+                                        </div>
+                                        {mapUnavailable && (
+                                            <p className="text-xs text-[#ff9aa4]">
+                                                {t('maps.noAvailable', { game: selectedGame })}
+                                            </p>
+                                        )}
+                                        {!mapUnavailable && !selectedMap && (
+                                            <p className="text-xs text-[#ff9aa4]">
+                                                {t('maps.mapRequired')}
+                                            </p>
+                                        )}
+                                    </>
+                                ) : (
+                                    <p className="text-sm text-slate-200">
+                                        {t('maps.noneAvailable')}
+                                    </p>
+                                )}
+                            </div>
+                        ) : (
+                            <p className="mt-3 text-sm text-slate-200">
+                                {t('maps.disabledDescription')}
+                            </p>
+                        )}
+                    </div>
+
+                    <div className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/5 p-4 md:flex-row md:items-center md:justify-between">
+                        <div>
+                            <p className="text-sm font-semibold text-white">
+                                {t('actions.scoreMatch')}
+                            </p>
+                            <p className="text-xs text-slate-200">
+                                {mapSelectionEnabled
+                                    ? mapUnavailable
+                                        ? t('maps.noAvailable', { game: selectedGame })
+                                        : selectedMap
+                                            ? t('maps.currentSelection', {
+                                                  game: selectedGame,
+                                                  map: selectedMap,
+                                              })
+                                            : t('maps.pending')
+                                    : t('maps.notTracking')}
+                            </p>
+                        </div>
                         <button
                             onClick={openResultModal}
-                            disabled={!teamsReady}
-                            className="rounded-2xl bg-green-600 px-4 py-2 font-semibold text-white transition hover:bg-green-500 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 dark:disabled:bg-slate-700 dark:disabled:text-slate-400"
+                            disabled={!canSaveMatch}
+                            className="valorant-btn-primary px-6 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
                         >
                             {t('actions.saveMatch')}
                         </button>
@@ -1309,51 +1695,53 @@ const Dashboard = () => {
                 </section>
             </div>
 
-            <section className="rounded-3xl border border-slate-200 bg-white/70 p-6 shadow dark:border-slate-700 dark:bg-slate-900/70">
+            <section className="valorant-panel">
                 <div className="flex items-center justify-between">
-                    <h2 className="text-xl font-semibold text-slate-900 dark:text-white">
-                        {t('matches.title')}
-                    </h2>
+                    <h2 className="text-xl font-semibold text-white">{t('matches.title')}</h2>
                 </div>
                 {matchesLoading && (
-                    <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
-                        {t('loading.matches')}
-                    </p>
+                    <p className="mt-4 text-sm text-slate-200">{t('loading.matches')}</p>
                 )}
                 {!matchesLoading && matches.length === 0 && (
-                    <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
-                        {t('matches.empty')}
-                    </p>
+                    <p className="mt-4 text-sm text-slate-200">{t('matches.empty')}</p>
                 )}
                 <div className="mt-4 space-y-4">
                     {matches.map((match) => (
                         <div
                             key={match.id}
-                            className="rounded-2xl border border-slate-100 bg-white p-4 dark:border-slate-700 dark:bg-slate-900"
+                            className="rounded-2xl border border-white/15 bg-white/10 p-4 text-slate-100"
                         >
-                            <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-500 dark:text-slate-400">
+                            <div className="flex flex-wrap items-center justify-between gap-2 text-xs tracking-[0.12em] text-slate-200">
                                 <span>{new Date(match.created_at).toLocaleString()}</span>
                                 <span>
-                                    {winnerLabel(match.winner)} · {match.teamA_score} -{' '}
-                                    {match.teamB_score}
+                                    {winnerLabel(match.winner)} · {match.teamA_score} - {match.teamB_score}
                                 </span>
+                            </div>
+                            <div className="mt-2 text-sm text-white">
+                                {match.game ? (
+                                    <>
+                                        {match.game}
+                                        {match.map ? ` · ${match.map}` : ''}
+                                    </>
+                                ) : (
+                                    <span className="text-slate-300">
+                                        {t('maps.historyUnknown')}
+                                    </span>
+                                )}
                             </div>
                             <div className="mt-3 grid gap-3 md:grid-cols-2">
                                 {[match.teamA, match.teamB].map((team, index) => (
                                     <div
                                         key={`${match.id}-${index}`}
-                                        className="rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/60"
+                                        className="rounded-2xl border border-white/15 bg-white/10 p-3"
                                     >
-                                        <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-                                            {index === 0
-                                                ? match.teamA_score
-                                                : match.teamB_score}{' '}
-                                            ·{' '}
+                                        <p className="text-sm font-semibold text-white">
+                                            {index === 0 ? match.teamA_score : match.teamB_score} ·{' '}
                                             {index === 0
                                                 ? teamNames.teamA || t('teams.teamA')
                                                 : teamNames.teamB || t('teams.teamB')}
                                         </p>
-                                        <ul className="mt-2 space-y-1 text-sm text-slate-600 dark:text-slate-300">
+                                        <ul className="mt-2 space-y-1 text-sm text-slate-100">
                                             {team.map((player) => (
                                                 <li key={`${player.name}-${player.skill}`}>
                                                     {player.name} · {player.skill}
@@ -1363,16 +1751,16 @@ const Dashboard = () => {
                                     </div>
                                 ))}
                             </div>
-                            <div className="mt-3 flex flex-wrap gap-2 text-sm">
+                            <div className="mt-3 flex flex-wrap gap-2 text-xs tracking-[0.12em]">
                                 <button
                                     onClick={() => openEditResultModal(match)}
-                                    className="rounded-full border border-indigo-200 px-3 py-1 text-indigo-600 dark:border-indigo-500"
+                                    className="valorant-btn-outline px-4 py-2"
                                 >
                                     {t('matches.editResult')}
                                 </button>
                                 <button
                                     onClick={() => handleDeleteMatch(match.id)}
-                                    className="rounded-full border border-red-200 px-3 py-1 text-red-600 dark:border-red-700 dark:text-red-300"
+                                    className="valorant-btn-primary px-4 py-2"
                                 >
                                     {t('actions.deleteMatch')}
                                 </button>
@@ -1396,6 +1784,42 @@ const Dashboard = () => {
                 onClose={() => setResultModalOpen(false)}
                 onConfirm={handleModalConfirm}
             />
+            <footer className="valorant-panel flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div>
+                    <p className="text-xs tracking-[0.12em] text-slate-200">
+                        {t('language.label')}
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                        {(['en', 'fr'] as const).map((lang) => (
+                            <button
+                                key={lang}
+                                onClick={() => setLanguage(lang)}
+                                className={`rounded-full border px-4 py-2 text-xs font-semibold tracking-[0.12em] transition ${
+                                    language === lang
+                                        ? 'border-[#ff5c8a]/40 bg-[#ff5c8a]/20 text-white shadow-[0_4px_16px_rgba(255,92,138,0.25)]'
+                                        : 'border-white/15 bg-white/5 text-slate-200 hover:border-white/40 hover:text-white'
+                                }`}
+                            >
+                                {lang.toUpperCase()}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+                <div className="flex flex-wrap gap-3">
+                    <button
+                        onClick={() => logout()}
+                        className="valorant-btn-outline px-6 py-2 text-xs"
+                    >
+                        {t('actions.logout')}
+                    </button>
+                    <button
+                        onClick={handleDeleteAccount}
+                        className="valorant-btn-primary px-6 py-2 text-xs"
+                    >
+                        {t('actions.deleteAccount')}
+                    </button>
+                </div>
+            </footer>
         </div>
     );
 };

@@ -22,17 +22,15 @@ const CookieConsent = () => {
     };
 
     return (
-        <div className="fixed bottom-4 left-1/2 z-50 w-[90%] max-w-3xl -translate-x-1/2 rounded-xl border border-slate-200 bg-white/90 p-4 shadow-2xl backdrop-blur dark:border-slate-700 dark:bg-slate-900/90">
-            <p className="font-semibold text-slate-900 dark:text-slate-100">
-                {t('cookie.title')}
-            </p>
-            <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-                {t('cookie.description')}
-            </p>
-            <div className="mt-4 flex justify-end">
+        <div className="valorant-panel fixed bottom-4 left-1/2 z-50 w-[92%] max-w-3xl -translate-x-1/2 rounded-2xl border-white/20 bg-black/60 p-5 backdrop-blur-2xl">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <p className="text-lg font-semibold text-white">{t('cookie.title')}</p>
+                    <p className="text-sm text-slate-100">{t('cookie.description')}</p>
+                </div>
                 <button
                     onClick={handleAccept}
-                    className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-500"
+                    className="valorant-btn-primary px-6 py-2 text-xs"
                 >
                     {t('cookie.accept')}
                 </button>

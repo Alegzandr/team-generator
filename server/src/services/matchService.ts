@@ -16,6 +16,8 @@ export interface MatchRecord {
     teamB_score: number;
     winner: 'teamA' | 'teamB' | 'unknown';
     created_at: string;
+    game: string | null;
+    map: string | null;
 }
 
 interface MatchRow {
@@ -26,6 +28,8 @@ interface MatchRow {
     teamA_score: number;
     teamB_score: number;
     winner: 'teamA' | 'teamB' | 'unknown';
+    game: string | null;
+    map_name: string | null;
     created_at: string;
 }
 
@@ -38,6 +42,8 @@ const parseRow = (row: MatchRow): MatchRecord => ({
     teamB_score: row.teamB_score ?? 0,
     winner: row.winner,
     created_at: row.created_at,
+    game: row.game ?? null,
+    map: row.map_name ?? null,
 });
 
 export const createMatch = async (
@@ -48,13 +54,17 @@ export const createMatch = async (
         winner?: string;
         teamA_score?: number;
         teamB_score?: number;
+        game?: string | null;
+        map?: string | null;
     }
 ) => {
     const winner = (data.winner as MatchRecord['winner']) || 'unknown';
     const teamA_score = Number(data.teamA_score || 0);
     const teamB_score = Number(data.teamB_score || 0);
+    const game = data.game ?? null;
+    const mapName = data.map ?? null;
     const result = await runQuery(
-        `INSERT INTO matches (user_id, teamA, teamB, teamA_score, teamB_score, winner) VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO matches (user_id, teamA, teamB, teamA_score, teamB_score, winner, game, map_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [
             userId,
             JSON.stringify(data.teamA),
@@ -62,6 +72,8 @@ export const createMatch = async (
             teamA_score,
             teamB_score,
             winner,
+            game,
+            mapName,
         ]
     );
 
@@ -79,7 +91,7 @@ export const createMatch = async (
 export const getMatchesForUser = async (userId: string) => {
     const rows = await allQuery<MatchRow>(
         `
-        SELECT id, user_id, teamA, teamB, teamA_score, teamB_score, winner, created_at
+        SELECT id, user_id, teamA, teamB, teamA_score, teamB_score, winner, game, map_name, created_at
         FROM matches
         WHERE user_id = ?
         ORDER BY datetime(created_at) DESC
@@ -103,7 +115,7 @@ export const updateMatchWinner = async (
         [winner, teamA_score, teamB_score, matchId, userId]
     );
     const row = await getQuery<MatchRow>(
-        `SELECT id, user_id, teamA, teamB, teamA_score, teamB_score, winner, created_at FROM matches WHERE id = ? AND user_id = ?`,
+        `SELECT id, user_id, teamA, teamB, teamA_score, teamB_score, winner, game, map_name, created_at FROM matches WHERE id = ? AND user_id = ?`,
         [matchId, userId]
     );
     if (!row) {

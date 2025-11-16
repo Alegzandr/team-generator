@@ -1,13 +1,39 @@
+@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 @import 'tailwindcss';
 
 @layer base {
     :root {
-        color-scheme: light;
-        background-color: #f8fafc;
+        color-scheme: dark;
+        background-color: #05060f;
+        font-family: 'Rajdhani', 'Space Grotesk', system-ui, sans-serif;
+        --valorant-red: #ff4655;
+        --valorant-cyan: #00f6ff;
+        --valorant-deep: #05060f;
+        --valorant-panel-bg: rgba(8, 12, 24, 0.95);
+        --valorant-card-bg: rgba(11, 16, 30, 0.92);
+        --valorant-border: rgba(255, 255, 255, 0.14);
+        --valorant-muted: #d7e6ff;
+    }
+
+    .app-shell {
+        @apply mx-auto w-full max-w-[1200px] px-4 md:px-8 lg:px-10;
     }
 
     body {
-        @apply min-h-screen bg-slate-50 text-slate-900 antialiased;
+        @apply min-h-screen bg-[#05060f] text-slate-100 antialiased;
+        font-family: 'Rajdhani', 'Space Grotesk', system-ui, sans-serif;
+        letter-spacing: 0.02em;
+        background-image:
+            radial-gradient(circle at 20% 20%, rgba(71, 86, 157, 0.35), transparent 45%),
+            radial-gradient(circle at 80% 0%, rgba(255, 70, 85, 0.4), transparent 45%),
+            linear-gradient(135deg, rgba(7, 11, 26, 0.95), rgba(3, 6, 16, 0.98));
+        background-attachment: fixed;
+        color: #f5f8ff;
+    }
+
+    ::selection {
+        background: color-mix(in oklab, var(--valorant-red) 70%, white);
+        color: #05060f;
     }
 
     button,
@@ -25,15 +51,93 @@
     }
 }
 
-@media (prefers-color-scheme: dark) {
-    @layer base {
-        :root {
-            color-scheme: dark;
-            background-color: #020617;
-        }
+@layer components {
+    .valorant-panel {
+        @apply rounded-3xl border p-6 text-slate-100 backdrop-blur-xl;
+        background: var(--valorant-panel-bg);
+        border-color: var(--valorant-border);
+        color: #f5f8ff;
+        box-shadow: 0 25px 80px rgba(0, 0, 0, 0.55);
+    }
 
-        body {
-            @apply bg-slate-950 text-slate-100;
-        }
+    .valorant-panel--glow {
+        box-shadow: 0 25px 90px rgba(0, 246, 255, 0.18);
+        border-color: rgba(0, 246, 255, 0.35);
+    }
+
+    .valorant-card {
+        @apply rounded-2xl border p-4 text-sm text-slate-100;
+        background: var(--valorant-card-bg);
+        border-color: rgba(255, 255, 255, 0.12);
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    }
+
+    .valorant-chip {
+        @apply inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em];
+        border-color: rgba(255, 255, 255, 0.35);
+        background: rgba(10, 20, 35, 0.85);
+        color: var(--valorant-muted);
+    }
+
+    .valorant-input {
+        @apply rounded-2xl border px-4 py-2 text-base text-white placeholder-slate-200 transition;
+        background: rgba(15, 20, 35, 0.95);
+        border-color: rgba(255, 255, 255, 0.18);
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+    }
+
+    .valorant-input:focus {
+        outline: none;
+        border-color: var(--valorant-cyan);
+        box-shadow: 0 0 0 3px rgba(0, 246, 255, 0.18);
+    }
+
+    .valorant-btn-primary {
+        @apply inline-flex items-center justify-center rounded-full border px-5 py-2 font-semibold uppercase tracking-[0.15em] text-white transition;
+        border-color: rgba(255, 255, 255, 0.35);
+        background:
+            linear-gradient(160deg, rgba(6, 9, 21, 0.75), rgba(15, 20, 35, 0.6)),
+            linear-gradient(120deg, #ff5c6a 0%, #f22fa4 55%, #28ecff 100%);
+        box-shadow:
+            0 8px 25px rgba(17, 22, 40, 0.7),
+            0 0 20px rgba(41, 248, 255, 0.2);
+    }
+
+    .valorant-btn-primary:hover {
+        box-shadow:
+            0 12px 30px rgba(17, 22, 40, 0.8),
+            0 0 28px rgba(255, 92, 117, 0.35);
+        filter: saturate(1.05);
+    }
+
+    .valorant-btn-outline {
+        @apply inline-flex items-center justify-center rounded-full border px-5 py-2 font-semibold uppercase tracking-[0.15em] text-white transition;
+        border-color: rgba(255, 255, 255, 0.25);
+        background: linear-gradient(145deg, rgba(8, 12, 24, 0.9), rgba(14, 22, 42, 0.9));
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+    }
+
+    .valorant-btn-outline:hover {
+        border-color: rgba(41, 248, 255, 0.5);
+        color: #e7f9ff;
+        box-shadow: inset 0 0 0 1px rgba(41, 248, 255, 0.4);
+    }
+}
+
+@layer utilities {
+    .text-slate-300 {
+        color: #d2dcff;
+    }
+
+    .text-slate-200 {
+        color: #e7eeff;
+    }
+
+    .text-slate-100 {
+        color: #f8fbff;
+    }
+
+    .text-slate-50 {
+        color: #fcfdff;
     }
 }

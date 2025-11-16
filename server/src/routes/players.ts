@@ -29,8 +29,8 @@ router.post('/', async (req, res) => {
     }
 
     const skillValue = Number(skill);
-    if (!Number.isInteger(skillValue) || skillValue < 1 || skillValue > 5) {
-        res.status(400).json({ message: 'Skill must be between 1 and 5' });
+    if (!Number.isInteger(skillValue) || skillValue < 0 || skillValue > 10) {
+        res.status(400).json({ message: 'Skill must be between 0 and 10' });
         return;
     }
 
@@ -79,8 +79,8 @@ router.patch('/:id', async (req, res) => {
     }
 
     const skillValue = Number(skill);
-    if (!Number.isInteger(skillValue) || skillValue < 1 || skillValue > 5) {
-        res.status(400).json({ message: 'Skill must be between 1 and 5' });
+    if (!Number.isInteger(skillValue) || skillValue < 0 || skillValue > 10) {
+        res.status(400).json({ message: 'Skill must be between 0 and 10' });
         return;
     }
 

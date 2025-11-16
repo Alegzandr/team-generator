@@ -9,6 +9,7 @@ import authRoutes from './routes/auth';
 import playerRoutes from './routes/players';
 import matchRoutes from './routes/matches';
 import userRoutes from './routes/user';
+import mapPreferenceRoutes from './routes/mapPreferences';
 import { startRetentionJob } from './services/retentionService';
 import './auth/discordAuth';
 import {
@@ -58,6 +59,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/players', playerRoutes);
 app.use('/api/matches', matchRoutes);
 app.use('/api/user', userRoutes);
+app.use('/api/maps/preferences', mapPreferenceRoutes);
 
 startRetentionJob();
 

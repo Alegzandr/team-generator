@@ -5,8 +5,9 @@
 ## Feature Snapshot
 
 -   **Discord OAuth login** – we only store your Discord ID, username, and avatar; an HttpOnly cookie carries the seven-day JWT so scripts can’t steal it.
--   **Saved & temporary rosters** – permanent players live in SQLite; temporary ones stay local to the browser. Both lists support inline edits, drag-and-drop reordering, and “select all / clear all” toggles.
--   **Momentum-aware balancing** – recent matches (last 4h) nudge a player’s effective skill up/down, helping the algorithm keep squads fresh. Fresh sessions start with zero momentum.
+-   **Saved & temporary rosters** – permanent players live in SQLite; temporary ones stay local to the browser. Both lists support inline edits, drag-and-drop reordering, and “select all / clear all” toggles, plus 0‑10 skill ratings that better reflect a player’s range.
+-   **Momentum-aware balancing** – recent matches (last 4h) nudge a player’s effective skill up/down, helping the algorithm keep squads fresh. Fresh sessions start with zero momentum, and the boost can be toggled off or scoped per game.
+-   **Game-aware map picker** – optionally pick or roll a map for each match (Valorant, CS2, Rocket League, LoL, Overwatch 2, Siege). Users can ban maps per game, and history stores the chosen game/map for future reference.
 -   **Drag-first team builder** – generate proposed teams, then drag players directly between columns (even to swap with a full roster). A fairness warning appears if skills drift too far apart.
 -   **Match scoring history** – saving a match records both team rosters and scores. Any entry can be edited or deleted, and the same modal is used to capture results everywhere.
 -   **Localization + GDPR** – English/French toggle, cookie consent banner, “delete everything” endpoint, and automatic inactive-user pruning keep the app compliant.
@@ -112,7 +113,8 @@ docker compose up --build
 | GET                   | `/api/user`                  | Current user (requires JWT)                                  |
 | DELETE                | `/api/user`                  | Remove user + saved data (GDPR)                              |
 | GET/POST/PATCH/DELETE | `/api/players`               | CRUD for saved players                                       |
-| GET/POST/PATCH/DELETE | `/api/matches`               | List, store, update, delete match results (scores + rosters) |
+| GET/POST/PATCH/DELETE | `/api/matches`               | List, store, update, delete match results (scores + rosters + map info) |
+| GET/PUT               | `/api/maps/preferences`      | Fetch or persist per-game banned maps for the picker |
 
 Browser clients must send `credentials: 'include'` so the HttpOnly `COOKIE_NAME` authentication cookie is attached to API calls; no `Authorization` header is necessary.
 
@@ -121,8 +123,9 @@ Browser clients must send `credentials: 'include'` so the HttpOnly `COOKIE_NAME`
 | Table     | Columns                                                                                 |
 | --------- | --------------------------------------------------------------------------------------- |
 | `users`   | `id`, `username`, `avatar`, `last_active`, `token_version`                              |
-| `players` | `id`, `user_id`, `name`, `skill`                                                        |
-| `matches` | `id`, `user_id`, `teamA`, `teamB`, `teamA_score`, `teamB_score`, `winner`, `created_at` |
+| `players` | `id`, `user_id`, `name`, `skill` (0‑10)                                                  |
+| `matches` | `id`, `user_id`, `teamA`, `teamB`, `teamA_score`, `teamB_score`, `winner`, `game`, `map_name`, `created_at` |
+| `map_preferences` | `user_id`, `preferences` (JSON blob of banned maps per title)                               |
 
 Foreign keys cascade so GDPR deletion wipes dependent rows automatically.
 

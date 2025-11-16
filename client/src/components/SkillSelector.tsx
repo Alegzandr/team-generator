@@ -7,7 +7,7 @@ interface SkillSelectorProps {
     compact?: boolean;
 }
 
-const options = [1, 2, 3, 4, 5];
+const options = Array.from({ length: 11 }, (_, index) => index);
 
 const SkillSelector = ({ value, onChange, name, compact = false }: SkillSelectorProps) => {
     const groupId = name ?? useId();
@@ -30,10 +30,10 @@ const SkillSelector = ({ value, onChange, name, compact = false }: SkillSelector
                         />
                         <label
                             htmlFor={inputId}
-                            className={`block cursor-pointer rounded-xl border px-2 py-2 text-center text-sm font-semibold transition ${
+                            className={`block cursor-pointer rounded-2xl border px-2 py-2 text-center text-sm font-semibold tracking-[0.08em] transition ${
                                 selected
-                                    ? 'border-indigo-500 bg-indigo-600 text-white dark:border-indigo-400 dark:bg-indigo-500'
-                                    : 'border-slate-200 bg-white text-slate-600 hover:border-indigo-200 hover:text-indigo-600 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:border-indigo-400 dark:hover:text-indigo-300'
+                                    ? 'border-[#ff5c8a]/40 bg-[#ff5c8a]/20 text-white shadow-[0_6px_20px_rgba(255,92,138,0.25)]'
+                                    : 'border-white/15 bg-white/5 text-slate-200 hover:border-white/40 hover:text-white'
                             } ${compact ? 'py-1 text-xs' : ''}`}
                         >
                             {option}

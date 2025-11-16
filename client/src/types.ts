@@ -30,4 +30,10 @@ export interface Match {
     teamB_score: number;
     winner: Winner;
     created_at: string;
+    game?: string | null;
+    map?: string | null;
+}
+
+export interface MapPreferences {
+    banned: Record<string, string[]>;
 }

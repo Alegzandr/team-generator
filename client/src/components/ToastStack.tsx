@@ -1,12 +1,9 @@
 import { useToast } from '../context/ToastContext';
 
 const variantStyles: Record<string, string> = {
-    success:
-        'border-green-200 bg-green-50 text-green-800 dark:border-green-800 dark:bg-green-900/70 dark:text-green-100',
-    error:
-        'border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-900/70 dark:text-red-100',
-    info:
-        'border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100',
+    success: 'border-emerald-400/40 bg-emerald-500/15 text-emerald-100 shadow-[0_0_25px_rgba(16,185,129,0.3)]',
+    error: 'border-[#ff4655]/40 bg-[#ff4655]/10 text-[#ff9aa4] shadow-[0_0_30px_rgba(255,70,85,0.35)]',
+    info: 'border-white/15 bg-white/10 text-slate-100 shadow-[0_0_25px_rgba(15,23,42,0.6)]',
 };
 
 const ToastStack = () => {
@@ -17,12 +14,12 @@ const ToastStack = () => {
             {toasts.map((toast) => (
                 <div
                     key={toast.id}
-                    className={`pointer-events-auto flex items-center gap-3 rounded-2xl border px-4 py-3 shadow-lg ${variantStyles[toast.variant]}`}
+                    className={`pointer-events-auto flex items-center gap-3 rounded-2xl border px-5 py-3 font-semibold tracking-[0.08em] ${variantStyles[toast.variant]}`}
                 >
-                    <span className="flex-1 text-sm font-medium">{toast.message}</span>
+                    <span className="flex-1 text-xs">{toast.message}</span>
                     <button
                         onClick={() => dismissToast(toast.id)}
-                        className="text-xs font-semibold text-slate-500 dark:text-slate-300"
+                        className="text-sm text-slate-200 transition hover:text-white"
                     >
                         ✕
                     </button>
