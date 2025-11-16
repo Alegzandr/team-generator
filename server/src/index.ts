@@ -7,6 +7,7 @@ import authRoutes from './routes/auth';
 import playerRoutes from './routes/players';
 import matchRoutes from './routes/matches';
 import userRoutes from './routes/user';
+import { startRetentionJob } from './services/retentionService';
 import './auth/discordAuth';
 
 dotenv.config();
@@ -41,6 +42,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api/players', playerRoutes);
 app.use('/api/matches', matchRoutes);
 app.use('/api/user', userRoutes);
+
+startRetentionJob();
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () =>

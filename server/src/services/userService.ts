@@ -13,7 +13,8 @@ export const upsertUser = async (user: StoredUser) => {
         VALUES (?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             username = excluded.username,
-            avatar = excluded.avatar
+            avatar = excluded.avatar,
+            last_active = CURRENT_TIMESTAMP
     `,
         [user.id, user.username, user.avatar]
     );
@@ -33,4 +34,12 @@ export const deleteUserAndData = async (userId: string) => {
 
 export const getUsers = async () => {
     return allQuery<StoredUser>('SELECT id, username, avatar FROM users', []);
+};
+
+export const deleteInactiveUsers = async (cutoffISO: string) => {
+    const result = await runQuery(
+        `DELETE FROM users WHERE DATETIME(last_active) <= DATETIME(?)`,
+        [cutoffISO]
+    );
+    return result.changes ?? 0;
 };
