@@ -1,147 +1,126 @@
-# Team Generator with Discord Authentication
+# Team Generator (Discord-authenticated)
 
-## Overview
+> Lightweight squad builder focused on small community nights: pick from saved or temporary players, drag them into balanced sides, capture scores, and revisit recent matches. Available in English and French.
 
-This project is a web application that allows users to create and balance teams based on player skill ratings. The application is built with **Vite + React (TypeScript) for the frontend** and **Node.js + Express (TypeScript) with SQLite for the backend**, all containerized using **Docker** and served through an **Nginx reverse proxy**. Users authenticate via **Discord OAuth2**, using their Discord username within the application. The platform supports **English (default) and French**.
+## Feature Snapshot
 
-## Features
+-   **Discord OAuth login** – we only store your Discord ID, username, and avatar; JWT keeps the session alive for seven days.
+-   **Saved & temporary rosters** – permanent players live in SQLite; temporary ones stay local to the browser. Both lists support inline edits, drag-and-drop reordering, and “select all / clear all” toggles.
+-   **Momentum-aware balancing** – recent matches (last 4h) nudge a player’s effective skill up/down, helping the algorithm keep squads fresh. Fresh sessions start with zero momentum.
+-   **Drag-first team builder** – generate proposed teams, then drag players directly between columns (even to swap with a full roster). A fairness warning appears if skills drift too far apart.
+-   **Match scoring history** – saving a match records both team rosters and scores. Any entry can be edited or deleted, and the same modal is used to capture results everywhere.
+-   **Localization + GDPR** – English/French toggle, cookie consent banner, and a “delete everything” endpoint keep the app compliant.
+-   **Docker-ready** – one `docker compose up` brings up the API, client bundle, and reverse proxy.
 
-### **Authentication & User Management**
+## Tech Stack
 
--   Login via **Discord OAuth2**.
--   **Persistent user sessions** to reduce frequent reauthentication.
--   Uses **Discord username and avatar**.
--   **GDPR (RGPD) compliance**:
-    -   Users are informed about data collection.
-    -   A **cookie consent banner** is implemented.
-    -   Minimal data storage, only necessary for functionality.
-    -   Users can **request data deletion**.
+-   **Frontend**: React 19 + Vite + TypeScript, Tailwind CSS v4, custom contexts (Auth, Language, Toast).
+-   **Backend**: Node 20, Express, Passport (Discord), JWT, SQLite (`sqlite3`), cookie-based session for OAuth handshake.
+-   **Infra**: Docker, Docker Compose, Nginx (serves static client + proxies `/api` to the server).
 
-### **Player Management**
+## Local Development
 
--   Users can **create and manage their player list**.
--   Players have a **name and a skill rating (1-5)**.
--   Users can **select players from their saved list** or add **temporary players**.
--   Temporary players are **not stored** in the database.
+### Prerequisites
 
-### **Team Creation & Balancing**
+-   Node.js 20+
+-   npm 10+
+-   Discord application (register redirect URI `http://localhost:3000/api/auth/discord/callback`)
 
--   Users can **specify the number of players per team** (must be even).
--   Assign **custom team names**.
--   Teams are balanced using **custom algorithms**:
-    -   **Default**: Balance teams by skill rating.
-    -   **Future Extension**: Improve matchmaking using match history (SBMM-style).
--   Users can **manually adjust teams**.
--   Quickly **generate or reroll team compositions**.
+### Environment files
 
-### **Match History & Result Tracking**
+`server/.env` (example in repo):
 
--   Every generated team set is stored as match history.
--   Users can mark a match as:
-    -   **Won**
-    -   **Lost**
-    -   **Unknown** (if no result is recorded)
--   View past matches and the teams that were formed.
+```env
+PORT=3000
+DISCORD_CLIENT_ID=your-client-id
+DISCORD_CLIENT_SECRET=your-client-secret
+DISCORD_REDIRECT_URI=http://localhost:3000/api/auth/discord/callback
+JWT_SECRET=super-secret-value
+DATABASE_URL=./data/database.sqlite
+SESSION_SECRET=another-secret
+CLIENT_URL=http://localhost:5173
+```
 
-### **Localization (English & French)**
+`client/.env`:
 
--   Default language: **English**, but users can switch to **French**.
--   Uses **i18n for structured language files**.
+```env
+VITE_API_URL=http://localhost:3000
+```
 
-### **User Experience (UX)**
+### Run it
 
--   **Fast & Efficient**: Users can create and balance teams with minimal friction.
--   **Intuitive UI**: Selecting players, adjusting teams, and confirming results is straightforward.
--   **Real-time Feedback**: Immediate updates when modifying teams or selecting players.
--   **Keyboard & Mouse Optimized**.
+```bash
+# API
+cd server
+npm install
+npm run dev
 
-## **Technical Stack**
+# Client (new shell)
+cd client
+npm install
+npm run dev
+```
 
-### **Frontend**
+-   API: `http://localhost:3000`
+-   UI: `http://localhost:5173`
 
--   **Vite + React + TypeScript**
--   **Tailwind CSS** for styling
--   **i18n** for localization
--   **React Context API** for state management (instead of Redux)
+## Docker
 
-### **Backend**
+### Dev stack (live reload)
 
--   **Node.js + Express + TypeScript**
--   **Passport.js (Discord OAuth2)**
--   **JWT for session management**
--   **SQLite** for data storage
--   **Prisma ORM** (optional)
+Spin up both Vite and the Express API with file watchers using the dedicated compose file:
 
-### **Infrastructure & Deployment**
+```bash
+docker compose -f docker-compose.dev.yml up --build
+```
 
--   **Docker** for containerization
--   **Nginx** as a reverse proxy
--   **Docker Compose** for service orchestration
+-   API: `http://localhost:3000`
+-   Vite dev server: `http://localhost:5173`
+-   Source folders are bind-mounted, and node_modules live inside the containers to keep host folders clean.
 
-## **Database Schema (SQLite)**
+### Production stack (Nginx + reverse proxy)
 
-### **Users Table**
+```bash
+docker compose up --build
+```
 
-| Field    | Type | Description              |
-| -------- | ---- | ------------------------ |
-| id       | TEXT | Discord ID (Primary Key) |
-| username | TEXT | Discord Username         |
-| avatar   | TEXT | Avatar URL               |
+-   Nginx serves the built client at `http://localhost:8080` and proxies `/api/*` to the Express server.
+-   SQLite data persists under `server/data/` thanks to the bind-mounted volume.
 
-### **Players Table**
+## API Summary
 
-| Field   | Type    | Description                        |
-| ------- | ------- | ---------------------------------- |
-| id      | INTEGER | Primary Key                        |
-| user_id | TEXT    | Foreign Key (Users) - Player owner |
-| name    | TEXT    | Player's name                      |
-| skill   | INTEGER | Skill rating (1-5)                 |
+| Method                | Endpoint                     | Notes                                                        |
+| --------------------- | ---------------------------- | ------------------------------------------------------------ |
+| GET                   | `/api/auth/discord`          | Kick off OAuth                                               |
+| GET                   | `/api/auth/discord/callback` | Finalize OAuth, issue JWT                                    |
+| GET                   | `/api/user`                  | Current user (requires JWT)                                  |
+| DELETE                | `/api/user`                  | Remove user + saved data (GDPR)                              |
+| GET/POST/PATCH/DELETE | `/api/players`               | CRUD for saved players                                       |
+| GET/POST/PATCH/DELETE | `/api/matches`               | List, store, update, delete match results (scores + rosters) |
 
-### **Matches Table**
+All non-OAuth routes expect `Authorization: Bearer <token>`.
 
-| Field   | Type    | Description                    |
-| ------- | ------- | ------------------------------ |
-| id      | INTEGER | Primary Key                    |
-| user_id | TEXT    | Foreign Key (Users)            |
-| teamA   | TEXT    | JSON string of team A players  |
-| teamB   | TEXT    | JSON string of team B players  |
-| winner  | TEXT    | 'teamA', 'teamB', or 'unknown' |
+## Database (SQLite)
 
-## **API Endpoints**
+| Table     | Columns                                                                                 |
+| --------- | --------------------------------------------------------------------------------------- |
+| `users`   | `id`, `username`, `avatar`                                                              |
+| `players` | `id`, `user_id`, `name`, `skill`                                                        |
+| `matches` | `id`, `user_id`, `teamA`, `teamB`, `teamA_score`, `teamB_score`, `winner`, `created_at` |
 
-### **Authentication**
+Foreign keys cascade so GDPR deletion wipes dependent rows automatically.
 
--   `GET /api/auth/discord` → Redirect to Discord OAuth2
--   `GET /api/auth/discord/callback` → Handle OAuth2 callback
--   `GET /api/user` → Get authenticated user
--   `DELETE /api/user` → Request data deletion (GDPR compliance)
+## Scripts
 
-### **Player Management**
-
--   `POST /api/players` → Add a new player
--   `GET /api/players` → Retrieve player list
--   `DELETE /api/players/:id` → Remove a player
-
-### **Match Management**
-
--   `POST /api/matches` → Save match result
--   `GET /api/matches` → Retrieve match history
--   `PATCH /api/matches/:id` → Update match result
-
-## **Future Features**
-
-1. **SBMM (Skill-Based Matchmaking)**: Future implementation where the system learns from previous matches.
-2. **Integration with Discord Bot**: Allow interaction directly via Discord.
-3. **Team Voting System**: Team members can confirm if generated teams feel balanced.
-4. **Live Match Tracking**: Track ongoing matches and scores.
-
-## **Next Steps**
-
-✅ **Confirm feature set and architecture**  
-🚀 **Develop MVP with essential functionalities**  
-🛡️ **Implement GDPR-compliant data handling & cookie consent**  
-📈 **Iterate & expand with additional features**
+| Location | Command           | Purpose             |
+| -------- | ----------------- | ------------------- |
+| server   | `npm run dev`     | Express + ts-node   |
+|          | `npm run build`   | Compile to `dist/`  |
+|          | `npm start`       | Run compiled server |
+| client   | `npm run dev`     | Vite dev server     |
+|          | `npm run build`   | Production bundle   |
+|          | `npm run preview` | Preview prod build  |
 
 ---
 
-This document serves as the blueprint for the project's development. Contributions and feedback are welcome! 🚀
+We intentionally kept the feature set lean: optimize for quick team generation, drag-and-drop tweaks, and simple score tracking. Extend it however you like—Discord bot hooks, richer analytics, or new balancing strategies can all build on top of this foundation.
