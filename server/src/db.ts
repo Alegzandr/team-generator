@@ -25,7 +25,8 @@ db.serialize(() => {
             id TEXT PRIMARY KEY,
             username TEXT NOT NULL,
             avatar TEXT,
-            last_active DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            last_active DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            token_version INTEGER NOT NULL DEFAULT 0
         )`
     );
 
@@ -63,6 +64,9 @@ db.serialize(() => {
 
     safeAlter(
         `ALTER TABLE users ADD COLUMN last_active DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`
+    );
+    safeAlter(
+        `ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0`
     );
     db.run(
         `UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE last_active IS NULL`,

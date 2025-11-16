@@ -125,7 +125,7 @@ const isSamePlayer = (a: TeamPlayer, b: TeamPlayer) => {
 };
 
 const Dashboard = () => {
-    const { user, token, logout } = useAuth();
+    const { user, logout } = useAuth();
     const { t, language, setLanguage } = useLanguage();
     const { pushToast } = useToast();
 
@@ -186,21 +186,17 @@ const Dashboard = () => {
         path: string,
         options: RequestInit = {}
     ): Promise<T> => {
-        if (!token) {
-            throw new Error('Missing token');
-        }
-
         const response = await fetch(`${API_URL}${path}`, {
             ...options,
             headers: {
                 'Content-Type': 'application/json',
-                Authorization: `Bearer ${token}`,
                 ...(options.headers || {}),
             },
+            credentials: 'include',
         });
 
         if (response.status === 401) {
-            logout();
+            await logout({ silent: true });
             throw new Error('Unauthorized');
         }
 
@@ -217,7 +213,11 @@ const Dashboard = () => {
     };
 
     useEffect(() => {
-        if (!token) return;
+        if (!user) {
+            setPlayers([]);
+            setMatches([]);
+            return;
+        }
 
         const loadPlayers = async () => {
             setPlayersLoading(true);
@@ -245,7 +245,7 @@ const Dashboard = () => {
 
         loadPlayers();
         loadMatches();
-    }, [token, t, pushToast]);
+    }, [user, t, pushToast]);
 
     useEffect(() => {
         setSelectedPlayerIds((prev) => {
@@ -719,7 +719,7 @@ const Dashboard = () => {
         try {
             await apiRequest('/api/user', { method: 'DELETE' });
             pushToast(t('feedback.deleted'), 'info');
-            logout();
+            await logout({ silent: true });
         } catch (error) {
             pushToast(t('feedback.error'), 'error');
         }
@@ -869,7 +869,7 @@ const Dashboard = () => {
                             ))}
                         </div>
                         <button
-                            onClick={logout}
+                            onClick={() => logout()}
                             className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 transition hover:border-slate-300 dark:border-slate-600 dark:text-slate-200 dark:hover:border-slate-500"
                         >
                             {t('actions.logout')}

@@ -3,6 +3,8 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import passport from 'passport';
 import session from 'express-session';
+import cookieParser from 'cookie-parser';
+import createMemoryStore from 'memorystore';
 import authRoutes from './routes/auth';
 import playerRoutes from './routes/players';
 import matchRoutes from './routes/matches';
@@ -17,6 +19,11 @@ const CLIENT_URL =
     process.env.DISCORD_CLIENT_URL ||
     'http://localhost:5173';
 
+const MemoryStore = createMemoryStore(session);
+const sessionStore = new MemoryStore({
+    checkPeriod: 24 * 60 * 60 * 1000,
+});
+
 const app = express();
 
 app.use(
@@ -25,13 +32,25 @@ app.use(
         credentials: true,
     })
 );
+app.use(cookieParser());
 app.use(express.json());
+
+const sessionCookieSecure =
+    process.env.SESSION_COOKIE_SECURE === 'true' ||
+    process.env.NODE_ENV === 'production';
+const sessionCookieSameSite = sessionCookieSecure ? 'none' : 'lax';
 
 app.use(
     session({
         secret: process.env.SESSION_SECRET!,
         resave: false,
         saveUninitialized: false,
+        store: sessionStore,
+        cookie: {
+            maxAge: 10 * 60 * 1000,
+            sameSite: sessionCookieSameSite,
+            secure: sessionCookieSecure,
+        },
     })
 );
 

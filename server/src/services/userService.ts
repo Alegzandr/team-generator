@@ -4,9 +4,16 @@ export interface StoredUser {
     id: string;
     username: string;
     avatar: string | null;
+    token_version: number;
 }
 
-export const upsertUser = async (user: StoredUser) => {
+export interface UserUpsertInput {
+    id: string;
+    username: string;
+    avatar: string | null;
+}
+
+export const upsertUser = async (user: UserUpsertInput) => {
     await runQuery(
         `
         INSERT INTO users (id, username, avatar)
@@ -18,12 +25,19 @@ export const upsertUser = async (user: StoredUser) => {
     `,
         [user.id, user.username, user.avatar]
     );
+
+    const record = await getUserById(user.id);
+    if (!record) {
+        throw new Error('Failed to load user after upsert');
+    }
+    return record;
 };
 
 export const getUserById = async (id: string) => {
-    return getQuery<StoredUser>('SELECT id, username, avatar FROM users WHERE id = ?', [
-        id,
-    ]);
+    return getQuery<StoredUser>(
+        'SELECT id, username, avatar, token_version FROM users WHERE id = ?',
+        [id]
+    );
 };
 
 export const deleteUserAndData = async (userId: string) => {
@@ -33,7 +47,10 @@ export const deleteUserAndData = async (userId: string) => {
 };
 
 export const getUsers = async () => {
-    return allQuery<StoredUser>('SELECT id, username, avatar FROM users', []);
+    return allQuery<StoredUser>(
+        'SELECT id, username, avatar, token_version FROM users',
+        []
+    );
 };
 
 export const deleteInactiveUsers = async (cutoffISO: string) => {
@@ -42,4 +59,10 @@ export const deleteInactiveUsers = async (cutoffISO: string) => {
         [cutoffISO]
     );
     return result.changes ?? 0;
+};
+
+export const touchUserActivity = async (userId: string) => {
+    await runQuery(`UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE id = ?`, [
+        userId,
+    ]);
 };

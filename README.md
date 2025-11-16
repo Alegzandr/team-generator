@@ -4,7 +4,7 @@
 
 ## Feature Snapshot
 
--   **Discord OAuth login** – we only store your Discord ID, username, and avatar; JWT keeps the session alive for seven days.
+-   **Discord OAuth login** – we only store your Discord ID, username, and avatar; an HttpOnly cookie carries the seven-day JWT so scripts can’t steal it.
 -   **Saved & temporary rosters** – permanent players live in SQLite; temporary ones stay local to the browser. Both lists support inline edits, drag-and-drop reordering, and “select all / clear all” toggles.
 -   **Momentum-aware balancing** – recent matches (last 4h) nudge a player’s effective skill up/down, helping the algorithm keep squads fresh. Fresh sessions start with zero momentum.
 -   **Drag-first team builder** – generate proposed teams, then drag players directly between columns (even to swap with a full roster). A fairness warning appears if skills drift too far apart.
@@ -36,9 +36,15 @@ DISCORD_CLIENT_ID=your-client-id
 DISCORD_CLIENT_SECRET=your-client-secret
 DISCORD_REDIRECT_URI=http://localhost:3000/api/auth/discord/callback
 JWT_SECRET=super-secret-value
+JWT_TTL_DAYS=7
 DATABASE_URL=./data/database.sqlite
 SESSION_SECRET=another-secret
 CLIENT_URL=http://localhost:5173
+SESSION_COOKIE_SECURE=false
+COOKIE_NAME=tg_token
+COOKIE_DOMAIN=
+COOKIE_SECURE=false
+COOKIE_MAX_AGE_DAYS=7
 GDPR_RETENTION_DAYS=90
 GDPR_RETENTION_CHECK_HOURS=24
 ```
@@ -71,6 +77,8 @@ npm run dev
 -   `GDPR_RETENTION_DAYS` (default **90**) controls when an inactive Discord account is purged along with its matches/players. Set to `0` or a negative value to disable automatic cleanup (not recommended).
 -   `GDPR_RETENTION_CHECK_HOURS` (default **24**) controls how often the cleanup job runs.
 -   Activity is refreshed on every authenticated API call, so active users are never deleted automatically.
+-   `JWT_TTL_DAYS` + `COOKIE_MAX_AGE_DAYS` keep browser sessions alive; set both lower if you want short-lived tokens.
+-   `COOKIE_SECURE=true` (and `SESSION_COOKIE_SECURE=true`) should be enabled in production behind HTTPS so cookies are only sent over TLS. Provide `COOKIE_DOMAIN` if the API sits on a subdomain.
 
 ## Docker
 
@@ -106,13 +114,13 @@ docker compose up --build
 | GET/POST/PATCH/DELETE | `/api/players`               | CRUD for saved players                                       |
 | GET/POST/PATCH/DELETE | `/api/matches`               | List, store, update, delete match results (scores + rosters) |
 
-All non-OAuth routes expect `Authorization: Bearer <token>`.
+Browser clients must send `credentials: 'include'` so the HttpOnly `COOKIE_NAME` authentication cookie is attached to API calls; no `Authorization` header is necessary.
 
 ## Database (SQLite)
 
 | Table     | Columns                                                                                 |
 | --------- | --------------------------------------------------------------------------------------- |
-| `users`   | `id`, `username`, `avatar`, `last_active`                                              |
+| `users`   | `id`, `username`, `avatar`, `last_active`, `token_version`                              |
 | `players` | `id`, `user_id`, `name`, `skill`                                                        |
 | `matches` | `id`, `user_id`, `teamA`, `teamB`, `teamA_score`, `teamB_score`, `winner`, `created_at` |
 

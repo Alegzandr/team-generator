@@ -10,6 +10,15 @@ const CLIENT_ID = process.env.DISCORD_CLIENT_ID!;
 const CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET!;
 const CALLBACK_URL = process.env.DISCORD_REDIRECT_URI!;
 const JWT_SECRET = process.env.JWT_SECRET!;
+const parsedTtl = Number(process.env.JWT_TTL_DAYS);
+const JWT_TTL_DAYS = Number.isFinite(parsedTtl) && parsedTtl > 0 ? parsedTtl : 7;
+
+export interface TokenPayload {
+    id: string;
+    username: string;
+    avatar: string | null;
+    tokenVersion: number;
+}
 
 passport.use(
     new DiscordStrategy(
@@ -18,6 +27,7 @@ passport.use(
             clientSecret: CLIENT_SECRET,
             callbackURL: CALLBACK_URL,
             scope: ['identify'],
+            state: true,
         },
         (accessToken, refreshToken, profile: Profile, done) => {
             return done(null, profile);
@@ -44,14 +54,6 @@ export const isAuthenticated = (
     res.status(401).json({ message: 'Unauthorized' });
 };
 
-export const generateToken = (user: Profile) => {
-    return jwt.sign(
-        {
-            id: user.id,
-            username: user.username,
-            avatar: user.avatar ?? null,
-        },
-        JWT_SECRET,
-        { expiresIn: '7d' }
-    );
+export const generateToken = (user: TokenPayload) => {
+    return jwt.sign(user, JWT_SECRET, { expiresIn: `${JWT_TTL_DAYS}d` });
 };
