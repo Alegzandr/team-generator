@@ -1,1 +1,25 @@
 @import 'tailwindcss';
+
+@layer base {
+    :root {
+        color-scheme: light;
+        background-color: #f8fafc;
+    }
+
+    body {
+        @apply min-h-screen bg-slate-50 text-slate-900 antialiased;
+    }
+}
+
+@media (prefers-color-scheme: dark) {
+    @layer base {
+        :root {
+            color-scheme: dark;
+            background-color: #020617;
+        }
+
+        body {
+            @apply bg-slate-950 text-slate-100;
+        }
+    }
+}
