@@ -39,6 +39,12 @@ export interface NetworkMember {
     id: string;
     username: string;
     avatar: string | null;
+    badges?: {
+        og?: boolean;
+        referral?: boolean;
+    };
+    badgesVisibleInSearch?: boolean;
+    joinedAt?: string | null;
 }
 
 export interface IncomingFriendRequest {
@@ -103,5 +109,15 @@ export interface XpRewards {
     playerRemove: number;
     referralBonus: number;
     networkMemberJoin: number;
-    networkMemberLeave: number;
+    networkMemberLeaveSelf: number;
+    networkMemberLeaveOthers: number;
+}
+
+export interface Notification {
+    id: number;
+    type: string;
+    message: string | null;
+    data: Record<string, unknown> | null;
+    isRead: boolean;
+    createdAt: string;
 }

@@ -5,6 +5,12 @@ export interface UserSummary {
     id: string;
     username: string;
     avatar: string | null;
+    joinedAt?: string | null;
+    badges?: {
+        og?: boolean;
+        referral?: boolean;
+    };
+    badgesVisibleInSearch?: boolean;
 }
 
 export interface NetworkState {
@@ -75,12 +81,79 @@ const removeInternalRequests = async (networkId: string) => {
     );
 };
 
+interface NetworkMemberRow {
+    id: string;
+    username: string;
+    avatar: string | null;
+    network_joined_at?: string | null;
+    badges_visible_in_search?: number;
+    network_id: string;
+}
+
+const getNetworkMemberRows = async (networkId: string) => {
+    return allQuery<NetworkMemberRow>(
+        `SELECT id, username, avatar, network_joined_at, badges_visible_in_search, network_id
+         FROM users
+         WHERE network_id = ?
+         ORDER BY datetime(network_joined_at) ASC`,
+        [networkId]
+    );
+};
+
+const getReferralEligibleIds = async (networkId: string) => {
+    const rows = await allQuery<{ referrer_id: string }>(
+        `SELECT DISTINCT referrer_id
+         FROM referrals
+         WHERE referrer_id IN (SELECT id FROM users WHERE network_id = ?)`,
+        [networkId]
+    );
+    return new Set(rows.map((row) => row.referrer_id));
+};
+
+const calculateOgSet = (members: NetworkMemberRow[]) => {
+    if (!members.length) return new Set<string>();
+    const sorted = [...members].sort((a, b) => {
+        const aTime = a.network_joined_at ? Date.parse(a.network_joined_at) : 0;
+        const bTime = b.network_joined_at ? Date.parse(b.network_joined_at) : 0;
+        return aTime - bTime;
+    });
+    const threshold = Math.max(1, Math.ceil(sorted.length * 0.25));
+    const ogIds = new Set<string>();
+    sorted.slice(0, threshold).forEach((member) => ogIds.add(member.id));
+    return ogIds;
+};
+
+const toSummaryWithBadges = async (networkId: string, members: NetworkMemberRow[]) => {
+    const ogIds = calculateOgSet(members);
+    const referralIds = await getReferralEligibleIds(networkId);
+    return members.map<UserSummary>((member) => ({
+        id: member.id,
+        username: member.username,
+        avatar: member.avatar,
+        joinedAt: member.network_joined_at ?? null,
+        badgesVisibleInSearch: Boolean(member.badges_visible_in_search),
+        badges: {
+            og: ogIds.has(member.id),
+            referral: referralIds.has(member.id),
+        },
+    }));
+};
+
+export const getKickEligibleIds = async (networkId: string) => {
+    const members = await getNetworkMemberRows(networkId);
+    return calculateOgSet(members);
+};
+
 const mergeNetworks = async (targetNetworkId: string, sourceNetworkId: string) => {
     if (targetNetworkId === sourceNetworkId) {
         return targetNetworkId;
     }
     await ensureNetworkRecord(targetNetworkId);
     await ensureNetworkRecord(sourceNetworkId);
+    const sourceMembers = await allQuery<{ id: string }>(
+        `SELECT id FROM users WHERE network_id = ?`,
+        [sourceNetworkId]
+    );
     await runQuery('BEGIN');
     try {
         await runQuery(`UPDATE players SET network_id = ? WHERE network_id = ?`, [
@@ -102,20 +175,26 @@ const mergeNetworks = async (targetNetworkId: string, sourceNetworkId: string) =
         await runQuery('ROLLBACK');
         throw error;
     }
+    if (sourceMembers.length) {
+        const ids = sourceMembers.map((member) => member.id);
+        const placeholders = ids.map(() => '?').join(', ');
+        await runQuery(
+            `UPDATE users SET network_joined_at = CURRENT_TIMESTAMP WHERE id IN (${placeholders})`,
+            ids
+        );
+    }
     await removeInternalRequests(targetNetworkId);
     return targetNetworkId;
 };
 
 export const getNetworkMembers = async (networkId: string) => {
-    return allQuery<UserSummary>(
-        `SELECT id, username, avatar FROM users WHERE network_id = ? ORDER BY username COLLATE NOCASE ASC`,
-        [networkId]
-    );
+    const members = await getNetworkMemberRows(networkId);
+    return toSummaryWithBadges(networkId, members);
 };
 
 export const getNetworkState = async (networkId: string, userId: string): Promise<NetworkState> => {
-    const [members, incoming, outgoing] = await Promise.all([
-        getNetworkMembers(networkId),
+    const [memberRows, incoming, outgoing] = await Promise.all([
+        getNetworkMemberRows(networkId),
         allQuery<{
             id: number;
             created_at: string;
@@ -145,6 +224,7 @@ export const getNetworkState = async (networkId: string, userId: string): Promis
             [userId]
         ),
     ]);
+    const members = await toSummaryWithBadges(networkId, memberRows);
 
     return {
         networkId,
@@ -173,8 +253,8 @@ export const searchNetworkCandidates = async (
         return [] as UserSummary[];
     }
     const likeTerm = `%${sanitizeSearch(trimmed)}%`;
-    return allQuery<UserSummary>(
-        `SELECT id, username, avatar
+    const rows = await allQuery<NetworkMemberRow>(
+        `SELECT id, username, avatar, network_joined_at, badges_visible_in_search, network_id
          FROM users
          WHERE username LIKE ? ESCAPE '\\'
            AND id != ?
@@ -189,6 +269,35 @@ export const searchNetworkCandidates = async (
          LIMIT ?`,
         [likeTerm, userId, networkId, userId, userId, limit]
     );
+
+    const results: UserSummary[] = [];
+    for (const row of rows) {
+        const badgesVisible = Boolean(row.badges_visible_in_search);
+        if (!badgesVisible) {
+            results.push({
+                id: row.id,
+                username: row.username,
+                avatar: row.avatar,
+                badgesVisibleInSearch: badgesVisible,
+                badges: { og: false, referral: false },
+            });
+            continue;
+        }
+        const referralIds = await getReferralEligibleIds(row.network_id);
+        const memberRows = await getNetworkMemberRows(row.network_id);
+        const ogIds = calculateOgSet(memberRows);
+        results.push({
+            id: row.id,
+            username: row.username,
+            avatar: row.avatar,
+            badgesVisibleInSearch: badgesVisible,
+            badges: {
+                og: ogIds.has(row.id),
+                referral: referralIds.has(row.id),
+            },
+        });
+    }
+    return results;
 };
 
 export const sendFriendRequest = async (senderId: string, targetId: string) => {
@@ -238,6 +347,8 @@ export const sendFriendRequest = async (senderId: string, targetId: string) => {
             id: target.id,
             username: target.username,
             avatar: target.avatar,
+            networkId: target.network_id,
+            badges: { referral: false, og: false },
         },
     };
 };
@@ -321,7 +432,10 @@ export const createIsolatedNetwork = async () => {
 
 export const moveUserToNetwork = async (userId: string, networkId: string) => {
     await ensureNetworkRecord(networkId);
-    await runQuery(`UPDATE users SET network_id = ? WHERE id = ?`, [networkId, userId]);
+    await runQuery(
+        `UPDATE users SET network_id = ?, network_joined_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        [networkId, userId]
+    );
 };
 
 export const deleteNetworkIfEmpty = async (networkId: string) => {

@@ -12,7 +12,8 @@ const XP_VALUES = {
     PLAYER_REMOVE: -5,
     REFERRAL: 150,
     NETWORK_MEMBER_JOIN: 45,
-    NETWORK_MEMBER_LEAVE: -45,
+    NETWORK_MEMBER_LEAVE_SELF: -95,
+    NETWORK_MEMBER_LEAVE_OTHERS: 0,
 };
 
 const isUniqueConstraintError = (error: unknown) =>
@@ -242,6 +243,14 @@ export const awardReferralXp = async (
     if (referrerId === referredId) {
         throw new Error('Cannot refer yourself');
     }
+    const existingReferral = await getQuery<{ id: number }>(
+        `SELECT id FROM referrals WHERE referred_id = ? LIMIT 1`,
+        [referredId]
+    );
+    if (existingReferral) {
+        const xp = await loadXpTotal(referrerId);
+        return { total: xp, delta: 0, breakdown: [] };
+    }
     const referrer = await getQuery<{ id: string }>(
         `SELECT id FROM users WHERE id = ?`,
         [referrerId]
@@ -284,18 +293,35 @@ export const awardNetworkMemberJoinXp = async (
     ]);
 };
 
-export const awardNetworkMemberLeaveXp = async (
-    actorId: string,
+export const awardNetworkDepartureXp = async (
     networkId: string,
-    memberId: string
+    departingUserId: string,
+    actorId: string
 ) => {
-    return runEventsForNetwork(networkId, actorId, [
-        {
-            amount: XP_VALUES.NETWORK_MEMBER_LEAVE,
-            type: 'network:member_leave',
-            context: `network:${networkId}:leave:${memberId}:${Date.now()}`,
-        },
-    ]);
+    const memberIds = await loadNetworkMemberIds(networkId);
+    const contextBase = `network:${networkId}:leave:${departingUserId}:${Date.now()}`;
+    let actorSummary: XpSummary | null = null;
+
+    for (const memberId of memberIds) {
+        const isDeparting = memberId === departingUserId;
+        const events: EventDescriptor[] = [
+            {
+                amount: isDeparting
+                    ? XP_VALUES.NETWORK_MEMBER_LEAVE_SELF
+                    : XP_VALUES.NETWORK_MEMBER_LEAVE_OTHERS,
+                type: isDeparting
+                    ? 'network:member_leave:self'
+                    : 'network:member_leave:peer',
+                context: `${contextBase}:${memberId}`,
+            },
+        ];
+        const summary = await runEvents(memberId, events);
+        if (memberId === actorId) {
+            actorSummary = summary;
+        }
+    }
+
+    return actorSummary ?? (await runEvents(actorId, []));
 };
 
 export const getXpRewards = () => ({
@@ -308,5 +334,6 @@ export const getXpRewards = () => ({
     playerRemove: XP_VALUES.PLAYER_REMOVE,
     referralBonus: XP_VALUES.REFERRAL,
     networkMemberJoin: XP_VALUES.NETWORK_MEMBER_JOIN,
-    networkMemberLeave: XP_VALUES.NETWORK_MEMBER_LEAVE,
+    networkMemberLeaveSelf: XP_VALUES.NETWORK_MEMBER_LEAVE_SELF,
+    networkMemberLeaveOthers: XP_VALUES.NETWORK_MEMBER_LEAVE_OTHERS,
 });

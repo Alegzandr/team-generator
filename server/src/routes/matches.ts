@@ -9,6 +9,9 @@ import {
     updateMatchWinner,
 } from '../services/matchService';
 import { awardMatchCompletionXp, type XpSummary } from '../services/xpService';
+import { emitNetworkSync } from '../services/realtimeService';
+import { addNotification } from '../services/notificationService';
+import { getNetworkMembers } from '../services/networkService';
 
 const router = express.Router();
 
@@ -83,6 +86,24 @@ router.post('/', async (req, res) => {
                 normalizedFeatures
             );
         }
+        emitNetworkSync(req.authUser!.networkId, 'matches', {
+            action: 'create',
+            matchId: match.id,
+        }).catch(() => undefined);
+        const members = await getNetworkMembers(req.authUser!.networkId);
+        const recipients = members
+            .filter((member) => member.id !== req.authUser!.id)
+            .map((member) => member.id);
+        if (recipients.length) {
+            await addNotification(recipients, {
+                type: 'match:create',
+                data: {
+                    actor: req.authUser!.username,
+                    status: match.status,
+                    game: match.game,
+                },
+            });
+        }
         res.status(201).json({ match, xp });
     } catch (error) {
         res.status(500).json({ message: 'Failed to save match' });
@@ -108,6 +129,23 @@ router.patch('/:id', async (req, res) => {
             normalizedWinner,
             { teamA: scoreA, teamB: scoreB }
         );
+        emitNetworkSync(req.authUser!.networkId, 'matches', {
+            action: 'update',
+            matchId,
+        }).catch(() => undefined);
+        const members = await getNetworkMembers(req.authUser!.networkId);
+        const recipients = members
+            .filter((member) => member.id !== req.authUser!.id)
+            .map((member) => member.id);
+        if (recipients.length) {
+            await addNotification(recipients, {
+                type: 'match:update',
+                data: {
+                    actor: req.authUser!.username,
+                    matchId,
+                },
+            });
+        }
         res.json(match);
     } catch (error) {
         if (error instanceof Error && error.message === 'Match not found') {
@@ -130,6 +168,10 @@ const deleteHandler = async (req: express.Request, res: express.Response) => {
             res.status(404).json({ message: 'Match not found' });
             return;
         }
+        emitNetworkSync(req.authUser!.networkId, 'matches', {
+            action: 'delete',
+            matchId,
+        }).catch(() => undefined);
         res.status(204).send();
     } catch (error) {
         res.status(500).json({ message: 'Failed to delete match' });

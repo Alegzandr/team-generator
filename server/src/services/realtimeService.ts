@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import { TOKEN_COOKIE_NAME } from '../config/authCookies';
 import { TokenPayload } from '../auth/discordAuth';
 import type { XpSummary } from './xpService';
+import { allQuery } from '../db';
 
 dotenv.config();
 
@@ -62,6 +63,19 @@ const emitToUser = (userId: string, payload: unknown) => {
     });
 };
 
+const emitToUsers = (userIds: string[], payload: unknown) => {
+    const unique = Array.from(new Set(userIds));
+    unique.forEach((id) => emitToUser(id, payload));
+};
+
+const loadNetworkMemberIds = async (networkId: string) => {
+    const rows = await allQuery<{ id: string }>(
+        `SELECT id FROM users WHERE network_id = ?`,
+        [networkId]
+    );
+    return rows.map((row) => row.id);
+};
+
 export const setupRealtimeServer = (server: http.Server) => {
     const wss = new WebSocketServer({ server, path: '/ws' });
     wss.on('connection', (socket, req) => {
@@ -87,6 +101,32 @@ export const emitXpUpdate = (userId: string, summary: XpSummary) => {
 
 export const emitSocialUpdate = (targets: string | string[]) => {
     const list = Array.isArray(targets) ? targets : [targets];
-    const unique = Array.from(new Set(list));
-    unique.forEach((userId) => emitToUser(userId, { type: 'social:update' }));
+    emitToUsers(list, { type: 'social:update' });
+};
+
+type SyncScope =
+    | 'players'
+    | 'matches'
+    | 'network'
+    | 'requests'
+    | 'notifications';
+
+const emitSync = (targets: string[], scope: SyncScope, meta?: Record<string, unknown>) => {
+    emitToUsers(targets, { type: 'sync', scope, meta });
+};
+
+export const emitNetworkSync = async (
+    networkId: string,
+    scope: SyncScope,
+    meta?: Record<string, unknown>
+) => {
+    const members = await loadNetworkMemberIds(networkId);
+    if (!members.length) return;
+    emitSync(members, scope, meta);
+};
+
+export const emitNotificationsUpdate = (targets: string | string[]) => {
+    const list = Array.isArray(targets) ? targets : [targets];
+    if (!list.length) return;
+    emitSync(list, 'notifications');
 };

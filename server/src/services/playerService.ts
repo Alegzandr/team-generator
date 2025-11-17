@@ -8,6 +8,13 @@ export interface PlayerRecord {
     skill: number;
 }
 
+export const findPlayerByName = async (networkId: string, name: string) => {
+    return getQuery<{ id: number }>(
+        `SELECT id FROM players WHERE network_id = ? AND LOWER(name) = LOWER(?) LIMIT 1`,
+        [networkId, name]
+    );
+};
+
 export const getPlayersForNetwork = async (networkId: string) => {
     return allQuery<PlayerRecord>(
         `

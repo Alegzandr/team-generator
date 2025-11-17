@@ -6,6 +6,7 @@ import {
     createIsolatedNetwork,
     deleteFriendRequest,
     deleteNetworkIfEmpty,
+    getKickEligibleIds,
     getNetworkMembers,
     getNetworkState,
     moveUserToNetwork,
@@ -14,9 +15,10 @@ import {
 } from '../services/networkService';
 import {
     awardNetworkMemberJoinXp,
-    awardNetworkMemberLeaveXp,
+    awardNetworkDepartureXp,
 } from '../services/xpService';
-import { emitSocialUpdate } from '../services/realtimeService';
+import { emitNetworkSync, emitSocialUpdate } from '../services/realtimeService';
+import { addNotification } from '../services/notificationService';
 
 const router = express.Router();
 
@@ -59,6 +61,14 @@ router.post('/requests', async (req, res) => {
         const request = await sendFriendRequest(req.authUser!.id, targetId);
         const state = await getNetworkState(req.authUser!.networkId, req.authUser!.id);
         emitSocialUpdate([req.authUser!.id, request.recipient.id]);
+        emitNetworkSync(req.authUser!.networkId, 'requests').catch(() => undefined);
+        if (request.recipient.networkId) {
+            emitNetworkSync(request.recipient.networkId, 'requests').catch(() => undefined);
+        }
+        await addNotification(request.recipient.id, {
+            type: 'network:friend_request',
+            data: { actor: req.authUser!.username },
+        });
         res.status(201).json({ state });
     } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to send request';
@@ -82,6 +92,17 @@ router.post('/requests/:id/accept', async (req, res) => {
         req.authUser!.networkId = result.networkId;
         const state = await getNetworkState(result.networkId, req.authUser!.id);
         emitSocialUpdate(state.members.map((member) => member.id));
+        emitNetworkSync(result.networkId, 'network').catch(() => undefined);
+        emitNetworkSync(result.networkId, 'requests').catch(() => undefined);
+        const recipients = state.members
+            .filter((member) => member.id !== req.authUser!.id)
+            .map((member) => member.id);
+        if (recipients.length) {
+            await addNotification(recipients, {
+                type: 'network:member_join',
+                data: { actor: req.authUser!.username },
+            });
+        }
         res.json({ state, xp });
     } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to accept';
@@ -103,6 +124,7 @@ router.delete('/requests/:id', async (req, res) => {
         }
         const state = await getNetworkState(req.authUser!.networkId, req.authUser!.id);
         emitSocialUpdate([req.authUser!.id, otherUserId]);
+        emitNetworkSync(req.authUser!.networkId, 'requests').catch(() => undefined);
         res.json({ state });
     } catch (error) {
         res.status(500).json({ message: 'Failed to update request' });
@@ -119,9 +141,9 @@ router.post('/leave', async (req, res) => {
     try {
         const members = await getNetworkMembers(currentNetworkId);
         const memberIds = members.map((member) => member.id);
-        const xp = await awardNetworkMemberLeaveXp(
-            req.authUser!.id,
+        const xp = await awardNetworkDepartureXp(
             currentNetworkId,
+            req.authUser!.id,
             req.authUser!.id
         );
         await clearUserFriendRequests(req.authUser!.id);
@@ -132,12 +154,74 @@ router.post('/leave', async (req, res) => {
         const state = await getNetworkState(newNetworkId, req.authUser!.id);
         const oldMembers = memberIds.filter((id) => id !== req.authUser!.id);
         if (oldMembers.length) {
+            await addNotification(oldMembers, {
+                type: 'network:left',
+                data: { actor: req.authUser!.username },
+            });
             emitSocialUpdate(oldMembers);
         }
+        emitNetworkSync(currentNetworkId, 'network', { action: 'leave' }).catch(
+            () => undefined
+        );
         emitSocialUpdate(req.authUser!.id);
         res.json({ state, xp });
     } catch (error) {
         res.status(500).json({ message: 'Failed to leave network' });
+    }
+});
+
+router.post('/members/:id/kick', async (req, res) => {
+    const targetId = typeof req.params.id === 'string' ? req.params.id : '';
+    if (!targetId) {
+        res.status(400).json({ message: 'Missing target id' });
+        return;
+    }
+    if (targetId === req.authUser!.id) {
+        res.status(400).json({ message: 'Cannot kick yourself' });
+        return;
+    }
+    const networkId = req.authUser!.networkId;
+    try {
+        const eligible = await getKickEligibleIds(networkId);
+        if (!eligible.has(req.authUser!.id)) {
+            res.status(403).json({ message: 'Not allowed to kick members' });
+            return;
+        }
+        const members = await getNetworkMembers(networkId);
+        const target = members.find((member) => member.id === targetId);
+        if (!target) {
+            res.status(404).json({ message: 'Member not found' });
+            return;
+        }
+        const memberIds = members.map((member) => member.id);
+        const xp = await awardNetworkDepartureXp(networkId, targetId, req.authUser!.id);
+        await clearUserFriendRequests(targetId);
+        const isolatedId = await createIsolatedNetwork();
+        await moveUserToNetwork(targetId, isolatedId);
+        await deleteNetworkIfEmpty(networkId);
+        const state = await getNetworkState(networkId, req.authUser!.id);
+        const remaining = memberIds.filter((id) => id !== targetId);
+        emitNetworkSync(networkId, 'network', { action: 'kick', targetId }).catch(
+            () => undefined
+        );
+        emitSocialUpdate(remaining);
+        emitSocialUpdate(targetId);
+        await addNotification(targetId, {
+            type: 'network:kicked',
+            data: { actor: req.authUser!.username },
+        });
+        if (remaining.length) {
+            await addNotification(remaining, {
+                type: 'network:kick_notice',
+                data: {
+                    actor: req.authUser!.username,
+                    target: target.username,
+                },
+            });
+        }
+        res.json({ state, xp });
+    } catch (error) {
+        res.status(500).json({ message: 'Failed to kick member' });
     }
 });
 

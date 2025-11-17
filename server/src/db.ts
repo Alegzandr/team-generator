@@ -360,6 +360,8 @@ db.serialize(() => {
             token_version INTEGER NOT NULL DEFAULT 0,
             xp_total INTEGER NOT NULL DEFAULT 0,
             network_id TEXT NOT NULL,
+            network_joined_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            badges_visible_in_search INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY(network_id) REFERENCES networks(id) ON DELETE CASCADE
         )`
     );
@@ -407,6 +409,19 @@ db.serialize(() => {
     );
 
     db.run(
+        `CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            type TEXT NOT NULL,
+            message TEXT,
+            data TEXT,
+            is_read INTEGER NOT NULL DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )`
+    );
+
+    db.run(
         `CREATE TABLE IF NOT EXISTS referrals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             referrer_id TEXT NOT NULL,
@@ -447,6 +462,12 @@ db.serialize(() => {
     );
     safeAlter(`ALTER TABLE users ADD COLUMN xp_total INTEGER NOT NULL DEFAULT 0`);
     safeAlter(`ALTER TABLE users ADD COLUMN network_id TEXT`);
+    safeAlter(
+        `ALTER TABLE users ADD COLUMN network_joined_at DATETIME DEFAULT CURRENT_TIMESTAMP`
+    );
+    safeAlter(
+        `ALTER TABLE users ADD COLUMN badges_visible_in_search INTEGER NOT NULL DEFAULT 0`
+    );
     db.run(
         `UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE last_active IS NULL`,
         (err) => {
@@ -456,6 +477,14 @@ db.serialize(() => {
                 !err.message.includes('no column named last_active')
             ) {
                 console.error('Failed to backfill last_active column:', err.message);
+            }
+        }
+    );
+    db.run(
+        `UPDATE users SET network_joined_at = CURRENT_TIMESTAMP WHERE network_joined_at IS NULL`,
+        (err) => {
+            if (err && !err.message.includes('no such column')) {
+                console.error('Failed to backfill network_joined_at column:', err.message);
             }
         }
     );

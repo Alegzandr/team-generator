@@ -1,5 +1,5 @@
 const STORAGE_KEY = 'team-generator:referral';
-const REF_PARAM = 'ref';
+const REF_PARAM = 'invite';
 
 const safeLocalStorage = () => {
     try {

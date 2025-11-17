@@ -12,6 +12,7 @@ import userRoutes from './routes/user';
 import mapPreferenceRoutes from './routes/mapPreferences';
 import xpRoutes from './routes/xp';
 import socialRoutes from './routes/social';
+import notificationRoutes from './routes/notifications';
 import { startRetentionJob } from './services/retentionService';
 import { setupRealtimeServer } from './services/realtimeService';
 import './auth/discordAuth';
@@ -65,6 +66,7 @@ app.use('/api/user', userRoutes);
 app.use('/api/maps/preferences', mapPreferenceRoutes);
 app.use('/api/xp', xpRoutes);
 app.use('/api/social', socialRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 startRetentionJob();
 

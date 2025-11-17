@@ -11,6 +11,8 @@ export interface StoredUser {
     token_version: number;
     xp_total?: number;
     network_id: string;
+    network_joined_at?: string;
+    badges_visible_in_search?: number;
 }
 
 export interface UserUpsertInput {
@@ -42,7 +44,7 @@ export const upsertUser = async (user: UserUpsertInput) => {
 
 export const getUserById = async (id: string) => {
     return getQuery<StoredUser>(
-        `SELECT id, username, avatar, token_version, xp_total, network_id
+        `SELECT id, username, avatar, token_version, xp_total, network_id, network_joined_at, badges_visible_in_search
          FROM users WHERE id = ?`,
         [id]
     );
@@ -98,4 +100,12 @@ export const touchUserActivity = async (userId: string) => {
     await runQuery(`UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE id = ?`, [
         userId,
     ]);
+};
+
+export const setBadgeVisibility = async (userId: string, visible: boolean) => {
+    await runQuery(
+        `UPDATE users SET badges_visible_in_search = ? WHERE id = ?`,
+        [visible ? 1 : 0, userId]
+    );
+    return getUserById(userId);
 };

@@ -1,3 +1,4 @@
+import { FiX } from 'react-icons/fi';
 import { useToast } from '../context/ToastContext';
 
 const variantStyles: Record<string, string> = {
@@ -19,9 +20,9 @@ const ToastStack = () => {
                     <span className="flex-1 text-xs">{toast.message}</span>
                     <button
                         onClick={() => dismissToast(toast.id)}
-                        className="text-sm text-slate-200 transition hover:text-white"
+                        className="text-base text-slate-200 transition hover:text-white"
                     >
-                        ✕
+                        <FiX aria-hidden="true" />
                     </button>
                 </div>
             ))}

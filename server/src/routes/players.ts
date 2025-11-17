@@ -3,6 +3,7 @@ import { requireAuth } from '../middleware/authMiddleware';
 import {
     createPlayer,
     deletePlayer,
+    findPlayerByName,
     getPlayersForNetworkPaginated,
     updatePlayer,
 } from '../services/playerService';
@@ -10,6 +11,9 @@ import {
     awardPlayerCreationXp,
     awardPlayerRemovalPenalty,
 } from '../services/xpService';
+import { emitNetworkSync } from '../services/realtimeService';
+import { addNotification } from '../services/notificationService';
+import { getNetworkMembers } from '../services/networkService';
 
 const router = express.Router();
 
@@ -49,6 +53,11 @@ router.post('/', async (req, res) => {
     }
 
     try {
+        const existing = await findPlayerByName(req.authUser!.networkId, name.trim());
+        if (existing) {
+            res.status(409).json({ message: 'Player already exists in this network' });
+            return;
+        }
         const player = await createPlayer(req.authUser!.networkId, req.authUser!.id, {
             name: name.trim(),
             skill: skillValue,
@@ -62,6 +71,22 @@ router.post('/', async (req, res) => {
             req.authUser!.networkId,
             player.id
         );
+        emitNetworkSync(req.authUser!.networkId, 'players', { action: 'create' }).catch(
+            () => undefined
+        );
+        const members = await getNetworkMembers(req.authUser!.networkId);
+        const recipients = members
+            .filter((member) => member.id !== req.authUser!.id)
+            .map((member) => member.id);
+        if (recipients.length) {
+            await addNotification(recipients, {
+                type: 'player:create',
+                data: {
+                    playerName: player.name,
+                    actor: req.authUser!.username,
+                },
+            });
+        }
         res.status(201).json({ player, xp });
     } catch (error) {
         res.status(500).json({ message: 'Failed to create player' });
@@ -86,6 +111,22 @@ router.delete('/:id', async (req, res) => {
             req.authUser!.networkId,
             playerId
         );
+        emitNetworkSync(req.authUser!.networkId, 'players', { action: 'delete' }).catch(
+            () => undefined
+        );
+        const members = await getNetworkMembers(req.authUser!.networkId);
+        const recipients = members
+            .filter((member) => member.id !== req.authUser!.id)
+            .map((member) => member.id);
+        if (recipients.length) {
+            await addNotification(recipients, {
+                type: 'player:remove',
+                data: {
+                    playerId,
+                    actor: req.authUser!.username,
+                },
+            });
+        }
         res.json({ xp });
     } catch (error) {
         res.status(500).json({ message: 'Failed to delete player' });
@@ -113,6 +154,11 @@ router.patch('/:id', async (req, res) => {
     }
 
     try {
+        const existing = await findPlayerByName(req.authUser!.networkId, name.trim());
+        if (existing && existing.id !== playerId) {
+            res.status(409).json({ message: 'Player already exists in this network' });
+            return;
+        }
         const player = await updatePlayer(req.authUser!.networkId, playerId, {
             name: name.trim(),
             skill: skillValue,
@@ -120,6 +166,22 @@ router.patch('/:id', async (req, res) => {
         if (!player) {
             res.status(404).json({ message: 'Player not found' });
             return;
+        }
+        emitNetworkSync(req.authUser!.networkId, 'players', { action: 'update' }).catch(
+            () => undefined
+        );
+        const members = await getNetworkMembers(req.authUser!.networkId);
+        const recipients = members
+            .filter((member) => member.id !== req.authUser!.id)
+            .map((member) => member.id);
+        if (recipients.length) {
+            await addNotification(recipients, {
+                type: 'player:update',
+                data: {
+                    playerName: player.name,
+                    actor: req.authUser!.username,
+                },
+            });
         }
         res.json(player);
     } catch (error) {

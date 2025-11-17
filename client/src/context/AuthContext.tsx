@@ -5,6 +5,7 @@ export interface User {
     username: string;
     avatar: string | null;
     networkId: string;
+    badgesVisibleInSearch?: boolean;
 }
 
 interface AuthContextType {

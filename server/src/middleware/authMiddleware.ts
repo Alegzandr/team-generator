@@ -15,6 +15,7 @@ export interface AuthenticatedUser {
     avatar: string | null;
     xp_total?: number;
     networkId: string;
+    badgesVisibleInSearch?: boolean;
 }
 
 declare global {
@@ -72,6 +73,7 @@ export const requireAuth: RequestHandler = async (
             avatar: storedUser.avatar,
             xp_total: storedUser.xp_total,
             networkId: storedUser.network_id,
+            badgesVisibleInSearch: Boolean(storedUser.badges_visible_in_search),
         };
         await touchUserActivity(storedUser.id);
         next();

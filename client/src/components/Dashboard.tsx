@@ -13,6 +13,7 @@ import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { useToast } from '../context/ToastContext';
 import { DEFAULT_GAME, GAME_TITLES, MAP_POOL, type GameTitle } from '../data/maps';
+import { FiBell, FiCamera } from 'react-icons/fi';
 import type {
     MapPreferences,
     Match,
@@ -28,6 +29,7 @@ import type {
     XpRewards,
     XpSnapshot,
     XpSummary,
+    Notification,
 } from '../types';
 import { TeamAssignment, balanceTeams, getTeamStats } from '../utils/teamBalancer';
 import {
@@ -257,6 +259,32 @@ const XpDot = ({
     );
 };
 
+const formatUsername = (value?: string | null) =>
+    value ? value.toUpperCase() : '';
+
+const BadgePill = ({
+    type,
+    compact,
+}: {
+    type: 'og' | 'referral';
+    compact?: boolean;
+}) => {
+    const label = type === 'og' ? 'OG' : 'REF';
+    const palette =
+        type === 'og'
+            ? 'from-pink-500/70 via-pink-400/70 to-cyan-400/70 text-white'
+            : 'from-cyan-500/70 via-emerald-400/70 to-teal-400/70 text-white';
+    return (
+        <span
+            className={`inline-flex items-center rounded-full bg-gradient-to-r ${palette} px-2 py-[2px] text-[0.65rem] font-semibold tracking-[0.15em] shadow-[0_4px_12px_rgba(0,0,0,0.3)] ${
+                compact ? 'uppercase' : ''
+            }`}
+        >
+            {label}
+        </span>
+    );
+};
+
 const augmentPlayerWithMomentum = <T extends { id?: number | string; name: string; skill: number }>(
     player: T,
     momentumMap: Record<string, number>
@@ -311,6 +339,10 @@ const Dashboard = () => {
     const [selectedTemporaryIds, setSelectedTemporaryIds] = useState<Set<string>>(
         new Set()
     );
+    const [notifications, setNotifications] = useState<Notification[]>([]);
+    const [notificationsLoading, setNotificationsLoading] = useState(false);
+    const [notificationsOpen, setNotificationsOpen] = useState(false);
+    const [networkHidden, setNetworkHidden] = useState(false);
     const [playerName, setPlayerName] = useState('');
     const [playerSkill, setPlayerSkill] = useState(5);
     const [tempName, setTempName] = useState('');
@@ -387,6 +419,20 @@ const Dashboard = () => {
     const [networkSendingRequest, setNetworkSendingRequest] = useState(false);
     const [networkLeaveLoading, setNetworkLeaveLoading] = useState(false);
     const [leaveConfirm, setLeaveConfirm] = useState('');
+    const [leaveModalOpen, setLeaveModalOpen] = useState(false);
+    const [kickInProgressId, setKickInProgressId] = useState<string | null>(null);
+    const [momentumHighlights, setMomentumHighlights] = useState<Set<string>>(new Set());
+    const [recentMatchHighlights, setRecentMatchHighlights] = useState<Set<number>>(
+        new Set()
+    );
+    const [badgeVisibilitySaving, setBadgeVisibilitySaving] = useState(false);
+    const [usernameCopied, setUsernameCopied] = useState<'idle' | 'copied' | 'error'>(
+        'idle'
+    );
+    const usernameCopyTimerRef = useRef<number | null>(null);
+    const momentumMapRef = useRef<Record<string, number>>({});
+    const matchHighlightTimersRef = useRef<Record<number, number>>({});
+    const scrollDirectionRef = useRef<number>(0);
 
     const activeMomentumGame = mapSelectionEnabled ? selectedGame : undefined;
 
@@ -404,6 +450,20 @@ const Dashboard = () => {
     const bannedInSelectedGame: string[] = mapPreferences.banned[selectedGame] ?? [];
     const availableMapOptions = mapOptions.filter(
         (map) => !bannedInSelectedGame.includes(map)
+    );
+    const unreadNotifications = useMemo(
+        () => notifications.filter((notification) => !notification.isRead).length,
+        [notifications]
+    );
+    const badgesVisible = Boolean(user?.badgesVisibleInSearch);
+    const canKickMembers = useMemo(
+        () =>
+            Boolean(
+                networkState?.members.find(
+                    (member) => member.id === user?.id && member.badges?.og
+                )
+            ),
+        [networkState?.members, user?.id]
     );
 
     const selectedPlayers: TeamPlayer[] = useMemo(() => {
@@ -626,6 +686,7 @@ const Dashboard = () => {
             });
             processNetworkResponse(response);
             setLeaveConfirm('');
+            setLeaveModalOpen(false);
             setNetworkPanelOpen(false);
             pushToast(t('network.left'), 'info');
         } catch (error) {
@@ -742,59 +803,15 @@ const Dashboard = () => {
     }, [user, apiRequest]);
 
     useEffect(() => {
-        if (!user) return;
-        if (typeof window === 'undefined') return;
-        let socket: WebSocket | null = null;
-        let reconnectTimer: number | null = null;
-        let stopped = false;
-
-        const buildWsUrl = () => {
-            try {
-                const base = API_URL || window.location.origin;
-                const url = new URL('/ws', base);
-                url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-                return url.toString();
-            } catch (error) {
-                console.error('Failed to resolve websocket URL', error);
-                return null;
-            }
-        };
-
-        const connect = () => {
-            const wsUrl = buildWsUrl();
-            if (!wsUrl) return;
-            socket = new WebSocket(wsUrl);
-            socket.onmessage = (event) => {
-                try {
-                    const data = JSON.parse(event.data);
-                    if (data?.type === 'xp:update') {
-                        applyXpSummary(data.payload as XpSummary);
-                    } else if (data?.type === 'social:update') {
-                        refreshNetworkState();
-                    }
-                } catch (error) {
-                    console.error('Failed to parse XP stream payload', error);
-                }
-            };
-            socket.onclose = () => {
-                if (stopped) return;
-                reconnectTimer = window.setTimeout(connect, 4000);
-            };
-            socket.onerror = () => {
-                socket?.close();
-            };
-        };
-
-        connect();
-
         return () => {
-            stopped = true;
-            if (reconnectTimer) {
-                window.clearTimeout(reconnectTimer);
+            if (usernameCopyTimerRef.current) {
+                window.clearTimeout(usernameCopyTimerRef.current);
             }
-            socket?.close();
+            Object.values(matchHighlightTimersRef.current).forEach((timer) => {
+                window.clearTimeout(timer);
+            });
         };
-    }, [user, applyXpSummary, refreshNetworkState]);
+    }, []);
 
     const ensureMatchReady = () => {
         if (!teamsReady) {
@@ -933,7 +950,7 @@ const Dashboard = () => {
         setShareStatus('idle');
         try {
             const target = new URL(window.location.href);
-            target.searchParams.set('ref', user.id);
+            target.searchParams.set('invite', user.id);
             const shareLink = target.toString();
             if (navigator.clipboard?.writeText) {
                 await navigator.clipboard.writeText(shareLink);
@@ -1062,7 +1079,31 @@ const Dashboard = () => {
         setMatchesLoading(true);
         try {
             const data = await apiRequest<Match[]>('/api/matches');
-            setMatches(data);
+            setMatches((prev) => {
+                const previousIds = new Set(prev.map((match) => match.id));
+                const newIds = data
+                    .filter((match) => !previousIds.has(match.id))
+                    .map((match) => match.id);
+                if (newIds.length) {
+                    setRecentMatchHighlights((prevSet) => {
+                        const next = new Set(prevSet);
+                        newIds.forEach((id) => next.add(id));
+                        return next;
+                    });
+                    newIds.forEach((id) => {
+                        const timer = window.setTimeout(() => {
+                            setRecentMatchHighlights((prevSet) => {
+                                const next = new Set(prevSet);
+                                next.delete(id);
+                                return next;
+                            });
+                            delete matchHighlightTimersRef.current[id];
+                        }, 1400);
+                        matchHighlightTimersRef.current[id] = timer;
+                    });
+                }
+                return data;
+            });
         } catch (error) {
             pushToast(t('feedback.error'), 'error');
         } finally {
@@ -1082,6 +1123,215 @@ const Dashboard = () => {
         }
     }, [apiRequest]);
 
+    const fetchNotifications = useCallback(async () => {
+        if (!user) {
+            setNotifications([]);
+            return;
+        }
+        setNotificationsLoading(true);
+        try {
+            const data = await apiRequest<Notification[]>('/api/notifications');
+            setNotifications(data);
+        } catch (error) {
+            console.error('Failed to load notifications', error);
+        } finally {
+            setNotificationsLoading(false);
+        }
+    }, [apiRequest, user]);
+
+    const markNotificationRead = useCallback(
+        async (notificationId: number, isRead = true) => {
+            try {
+                await apiRequest(`/api/notifications/${notificationId}/read`, {
+                    method: 'PATCH',
+                    body: JSON.stringify({ read: isRead }),
+                });
+                setNotifications((prev) =>
+                    prev.map((notification) =>
+                        notification.id === notificationId
+                            ? { ...notification, isRead }
+                            : notification
+                    )
+                );
+            } catch (error) {
+                console.error('Failed to update notification', error);
+            }
+        },
+        [apiRequest]
+    );
+
+    const removeNotification = useCallback(
+        async (notificationId: number) => {
+            try {
+                await apiRequest(`/api/notifications/${notificationId}`, {
+                    method: 'DELETE',
+                });
+                setNotifications((prev) =>
+                    prev.filter((notification) => notification.id !== notificationId)
+                );
+            } catch (error) {
+                console.error('Failed to delete notification', error);
+            }
+        },
+        [apiRequest]
+    );
+
+    useEffect(() => {
+        if (!user) return;
+        if (typeof window === 'undefined') return;
+        let socket: WebSocket | null = null;
+        let reconnectTimer: number | null = null;
+        let stopped = false;
+
+        const buildWsUrl = () => {
+            try {
+                const base = API_URL || window.location.origin;
+                const url = new URL('/ws', base);
+                url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+                return url.toString();
+            } catch (error) {
+                console.error('Failed to resolve websocket URL', error);
+                return null;
+            }
+        };
+
+        const connect = () => {
+            const wsUrl = buildWsUrl();
+            if (!wsUrl) return;
+            socket = new WebSocket(wsUrl);
+            socket.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data?.type === 'xp:update') {
+                        applyXpSummary(data.payload as XpSummary);
+                    } else if (data?.type === 'social:update') {
+                        refreshNetworkState();
+                    } else if (data?.type === 'sync') {
+                        if (data.scope === 'players') {
+                            fetchPlayers(true);
+                        } else if (data.scope === 'matches') {
+                            fetchMatches();
+                        } else if (data.scope === 'network' || data.scope === 'requests') {
+                            refreshNetworkState();
+                        } else if (data.scope === 'notifications') {
+                            fetchNotifications();
+                        }
+                    }
+                } catch (error) {
+                    console.error('Failed to parse XP stream payload', error);
+                }
+            };
+            socket.onclose = () => {
+                if (stopped) return;
+                reconnectTimer = window.setTimeout(connect, 4000);
+            };
+            socket.onerror = () => {
+                socket?.close();
+            };
+        };
+
+        connect();
+
+        return () => {
+            stopped = true;
+            if (reconnectTimer) {
+                window.clearTimeout(reconnectTimer);
+            }
+            socket?.close();
+        };
+    }, [user, applyXpSummary, refreshNetworkState, fetchPlayers, fetchMatches, fetchNotifications]);
+
+    const handleToggleBadgeVisibility = useCallback(async () => {
+        if (!user || badgeVisibilitySaving) return;
+        setBadgeVisibilitySaving(true);
+        try {
+            const response = await apiRequest<{ badgesVisibleInSearch: boolean }>(
+                '/api/user/badges',
+                {
+                    method: 'PATCH',
+                    body: JSON.stringify({ visible: !badgesVisible }),
+                }
+            );
+            await refreshUser();
+            pushToast(
+                response.badgesVisibleInSearch
+                    ? t('network.searchVisibleToast')
+                    : t('network.searchHiddenToast'),
+                'info'
+            );
+        } catch (error) {
+            pushToast(t('feedback.error'), 'error');
+        } finally {
+            setBadgeVisibilitySaving(false);
+        }
+    }, [
+        apiRequest,
+        badgeVisibilitySaving,
+        badgesVisible,
+        refreshUser,
+        t,
+        pushToast,
+        user,
+    ]);
+
+    const handleKickMember = useCallback(
+        async (memberId: string) => {
+            if (!memberId || kickInProgressId) return;
+            setKickInProgressId(memberId);
+            try {
+                const response = await apiRequest<{ state?: NetworkState; xp?: XpSummary }>(
+                    `/api/social/members/${memberId}/kick`,
+                    { method: 'POST' }
+                );
+                if (response.state) {
+                    setNetworkState(response.state);
+                }
+                handleXpEnvelope(response);
+                pushToast(t('network.memberKicked'), 'info');
+            } catch (error) {
+                const message =
+                    error instanceof ApiError && error.status === 403
+                        ? t('network.kickNotAllowed')
+                        : t('feedback.error');
+                pushToast(message, 'error');
+            } finally {
+                setKickInProgressId(null);
+            }
+        },
+        [apiRequest, handleXpEnvelope, pushToast, t, kickInProgressId]
+    );
+
+    const handleCopyUsername = useCallback(async () => {
+        if (!user) return;
+        if (usernameCopyTimerRef.current) {
+            window.clearTimeout(usernameCopyTimerRef.current);
+        }
+        try {
+            if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(user.username);
+            } else {
+                const textarea = document.createElement('textarea');
+                textarea.value = user.username;
+                textarea.style.position = 'fixed';
+                textarea.style.left = '-9999px';
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+            }
+            setUsernameCopied('copied');
+            pushToast(t('app.usernameCopied'), 'success');
+        } catch (error) {
+            setUsernameCopied('error');
+            pushToast(t('app.usernameCopyError'), 'error');
+        } finally {
+            usernameCopyTimerRef.current = window.setTimeout(
+                () => setUsernameCopied('idle'),
+                2400
+            );
+        }
+    }, [user, pushToast, t]);
+
     useEffect(() => {
         if (!user) {
             setPlayers([]);
@@ -1095,6 +1345,9 @@ const Dashboard = () => {
             setNetworkState(null);
             setNetworkPanelOpen(false);
             setLeaveConfirm('');
+            setNotifications([]);
+            setNotificationsOpen(false);
+            setNetworkHidden(false);
             return;
         }
 
@@ -1102,7 +1355,15 @@ const Dashboard = () => {
         fetchMatches();
         fetchMapPreferences();
         refreshNetworkState();
-    }, [user, fetchPlayers, fetchMatches, fetchMapPreferences, refreshNetworkState]);
+        fetchNotifications();
+    }, [
+        user,
+        fetchPlayers,
+        fetchMatches,
+        fetchMapPreferences,
+        refreshNetworkState,
+        fetchNotifications,
+    ]);
 
     useEffect(() => {
         if (!user || !networkState) {
@@ -1195,6 +1456,69 @@ const Dashboard = () => {
             setSelectedMap(null);
         }
     }, [mapSelectionEnabled, mapPreferences, selectedMap, selectedGame, mapOptions]);
+
+    useEffect(() => {
+        const previous = momentumMapRef.current;
+        const changedKeys = new Set<string>();
+        Object.keys(momentumMap).forEach((key) => {
+            if (previous[key] !== momentumMap[key]) {
+                changedKeys.add(key);
+            }
+        });
+        Object.keys(previous).forEach((key) => {
+            if (!(key in momentumMap)) {
+                changedKeys.add(key);
+            }
+        });
+        let timer: number | null = null;
+        if (changedKeys.size) {
+            setMomentumHighlights(new Set(changedKeys));
+            timer = window.setTimeout(() => setMomentumHighlights(new Set()), 700);
+        }
+        momentumMapRef.current = momentumMap;
+        return () => {
+            if (timer) {
+                window.clearTimeout(timer);
+            }
+        };
+    }, [momentumMap]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        let lastY = window.scrollY;
+        let ticking = false;
+
+        const handleScroll = () => {
+            const process = () => {
+                const currentY = window.scrollY;
+                const delta = currentY - lastY;
+                if (currentY < 24) {
+                    setNetworkHidden(false);
+                } else if (delta > 8) {
+                    setNetworkHidden(true);
+                } else if (delta < -8) {
+                    setNetworkHidden(false);
+                }
+                lastY = currentY;
+                ticking = false;
+            };
+
+            if (!ticking) {
+                window.requestAnimationFrame(process);
+                ticking = true;
+            }
+        };
+
+        window.addEventListener('scroll', handleScroll, { passive: true });
+        return () => window.removeEventListener('scroll', handleScroll);
+    }, []);
+
+    useEffect(() => {
+        if (!notificationsOpen) return;
+        notifications
+            .filter((notification) => !notification.isRead)
+            .forEach((notification) => markNotificationRead(notification.id, true));
+    }, [notificationsOpen, notifications, markNotificationRead]);
 
     useEffect(() => {
         if (!user) {
@@ -1314,7 +1638,11 @@ const Dashboard = () => {
             pushToast(t('actions.addPlayer'), 'success');
             handleXpEnvelope(response);
         } catch (error) {
-            pushToast(t('feedback.error'), 'error');
+            const message =
+                error instanceof ApiError && error.status === 409
+                    ? t('players.duplicate')
+                    : t('feedback.error');
+            pushToast(message, 'error');
         }
     };
 
@@ -1369,7 +1697,11 @@ const Dashboard = () => {
             cancelEditing();
             pushToast(t('actions.saveChanges'), 'success');
         } catch (error) {
-            pushToast(t('feedback.error'), 'error');
+            const message =
+                error instanceof ApiError && error.status === 409
+                    ? t('players.duplicate')
+                    : t('feedback.error');
+            pushToast(message, 'error');
         }
     };
 
@@ -1450,7 +1782,11 @@ const Dashboard = () => {
                 next.add(tempId);
                 return next;
             });
-            pushToast(t('feedback.error'), 'error');
+            const message =
+                error instanceof ApiError && error.status === 409
+                    ? t('players.duplicate')
+                    : t('feedback.error');
+            pushToast(message, 'error');
         } finally {
             setConvertingTempIds((prev) => {
                 const next = new Set(prev);
@@ -1495,6 +1831,40 @@ const Dashboard = () => {
 
 
 const notifyTeamsLocked = () => pushToast(t('teams.locked'), 'info');
+
+const formatNotificationMessage = (
+    notification: Notification,
+    t: ReturnType<typeof useLanguage>['t']
+) => {
+    const data = notification.data || {};
+    const actor = formatUsername((data.actor as string) || '');
+    const target = formatUsername((data.target as string) || '');
+    const player = (data.playerName as string) || '';
+    switch (notification.type) {
+        case 'player:create':
+            return t('notifications.playerCreate', { actor, player });
+        case 'player:update':
+            return t('notifications.playerUpdate', { actor, player });
+        case 'player:remove':
+            return t('notifications.playerRemove', { actor });
+        case 'match:create':
+            return t('notifications.matchCreate', { actor });
+        case 'match:update':
+            return t('notifications.matchUpdate', { actor });
+        case 'network:friend_request':
+            return t('notifications.friendRequest', { actor });
+        case 'network:left':
+            return t('notifications.memberLeft', { actor });
+        case 'network:kicked':
+            return t('notifications.kicked', { actor });
+        case 'network:kick_notice':
+            return t('notifications.kickNotice', { actor, target });
+        case 'network:member_join':
+            return t('notifications.memberJoin', { actor });
+        default:
+            return notification.message || t('notifications.generic');
+    }
+};
 
 const copyElementToClipboard = async (element: HTMLElement) => {
     const dataUrl = await toPng(element, {
@@ -1968,16 +2338,22 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                             <img
                                 src={`https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png`}
                                 alt={user.username}
-                                className="h-12 w-12 rounded-full border border-white/15"
+                                className="h-14 w-14 rounded-full border border-white/15"
                             />
                         ) : (
-                            <div className="h-12 w-12 rounded-full bg-white/10" />
+                            <div className="h-14 w-14 rounded-full bg-white/10" />
                         )}
-                        <div>
+                        <div className="space-y-1">
                             <p className="text-xs tracking-[0.15em] text-slate-200">
                                 {t('app.title')}
                             </p>
-                            <p className="text-xl font-semibold text-white">{user?.username}</p>
+                            <button
+                                type="button"
+                                onClick={handleCopyUsername}
+                                className="flex flex-col items-start rounded-lg text-left text-2xl font-semibold text-white transition hover:text-cyan-100 cursor-pointer"
+                            >
+                                {formatUsername(user?.username)}
+                            </button>
                         </div>
                     </div>
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
@@ -2031,9 +2407,117 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                                 )}
                             </div>
                         </div>
+                            <div className="relative">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    if (!notificationsOpen) {
+                                        fetchNotifications();
+                                    }
+                                    setNotificationsOpen((prev) => !prev);
+                                }}
+                                className="relative flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-white/5 text-xl transition hover:border-cyan-400/50 hover:shadow-[0_10px_25px_rgba(0,246,255,0.25)]"
+                                aria-label={t('notifications.title')}
+                            >
+                                <FiBell
+                                    className={
+                                        unreadNotifications > 0 ? 'text-amber-300' : 'text-slate-300'
+                                    }
+                                    aria-hidden="true"
+                                />
+                                {unreadNotifications > 0 && (
+                                    <span className="absolute -right-1 -top-1 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-[#ff4655] px-1 text-[0.65rem] font-semibold text-white">
+                                        {unreadNotifications}
+                                    </span>
+                                )}
+                            </button>
+                            {notificationsOpen && (
+                                <div className="absolute right-0 z-20 mt-2 w-80 rounded-2xl border border-white/10 bg-[#0b0c16] p-3 shadow-xl">
+                                    <div className="mb-2 flex items-center justify-between">
+                                        <p className="text-xs uppercase tracking-[0.2em] text-slate-300">
+                                            {t('notifications.title')}
+                                        </p>
+                                        <button
+                                            type="button"
+                                            className="text-[0.65rem] uppercase tracking-[0.2em] text-cyan-200"
+                                            onClick={() => setNotificationsOpen(false)}
+                                        >
+                                            {t('actions.close')}
+                                        </button>
+                                    </div>
+                                    {notificationsLoading ? (
+                                        <p className="text-xs text-slate-300">
+                                            {t('loading.notifications')}
+                                        </p>
+                                    ) : notifications.length === 0 ? (
+                                        <p className="text-xs text-slate-400">
+                                            {t('notifications.empty')}
+                                        </p>
+                                    ) : (
+                                        <div className="flex max-h-80 flex-col gap-2 overflow-auto pr-1">
+                                            {notifications.map((notification) => (
+                                                <div
+                                                    key={notification.id}
+                                                    className={`flex gap-3 rounded-xl border p-3 text-left transition ${
+                                                        notification.isRead
+                                                            ? 'border-white/10 bg-white/5'
+                                                            : 'border-cyan-400/50 bg-cyan-500/5'
+                                                    }`}
+                                                >
+                                                    <span
+                                                        className={`mt-1 h-2 w-2 rounded-full ${
+                                                            notification.isRead
+                                                                ? 'bg-slate-500'
+                                                                : 'bg-cyan-300 shadow-[0_0_12px_rgba(34,211,238,0.8)]'
+                                                        }`}
+                                                    />
+                                                    <div className="flex-1 space-y-1">
+                                                        <p className="text-sm text-white">
+                                                            {formatNotificationMessage(notification, t)}
+                                                        </p>
+                                                        <p className="text-[0.65rem] uppercase tracking-[0.2em] text-slate-400">
+                                                            {new Date(notification.createdAt).toLocaleString()}
+                                                        </p>
+                                                        <div className="flex flex-wrap gap-2 text-[0.65rem] uppercase tracking-[0.18em]">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() =>
+                                                                    markNotificationRead(
+                                                                        notification.id,
+                                                                        !notification.isRead
+                                                                    )
+                                                                }
+                                                                className="rounded-full border border-white/20 px-3 py-1 text-white hover:border-cyan-400/60"
+                                                            >
+                                                                {notification.isRead
+                                                                    ? t('notifications.markUnread')
+                                                                    : t('notifications.markRead')}
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() =>
+                                                                    removeNotification(notification.id)
+                                                                }
+                                                                className="rounded-full border border-white/20 px-3 py-1 text-white hover:border-rose-400/60"
+                                                            >
+                                                                {t('notifications.remove')}
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
-                <div className="mt-5 rounded-2xl border border-white/10 bg-white/5 p-4">
+                <div
+                    className={`mt-5 overflow-hidden rounded-2xl border border-white/10 bg-white/5 transition-all duration-300 ${
+                        networkHidden ? 'max-h-0 opacity-0 py-0' : 'max-h-[1000px] opacity-100 p-4'
+                    }`}
+                >
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                         <div>
                             <p className="text-xs uppercase tracking-[0.15em] text-slate-300">
@@ -2112,43 +2596,54 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                                                         {member.username.slice(0, 2).toUpperCase()}
                                                     </div>
                                                 )}
-                                                <div>
-                                                    <p className="text-sm font-semibold text-white">{member.username}</p>
-                                                    {member.id === user?.id && (
-                                                        <span className="text-[0.6rem] uppercase tracking-[0.3em] text-cyan-300">
-                                                            {t('network.youTag')}
-                                                        </span>
-                                                    )}
+                                                <div className="space-y-1">
+                                                    <p className="text-sm font-semibold text-white">
+                                                        {formatUsername(member.username)}
+                                                    </p>
+                                                    <div className="flex flex-wrap items-center gap-2">
+                                                        {member.badges?.og && <BadgePill type="og" compact />}
+                                                        {member.badges?.referral && (
+                                                            <BadgePill type="referral" compact />
+                                                        )}
+                                                        {member.id === user?.id && (
+                                                            <span className="text-[0.6rem] uppercase tracking-[0.3em] text-cyan-300">
+                                                                {t('network.youTag')}
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                 </div>
                                             </div>
+                                            {canKickMembers && member.id !== user?.id && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleKickMember(member.id)}
+                                                    disabled={kickInProgressId === member.id}
+                                                    className="rounded-full border border-rose-400/50 bg-rose-500/10 px-3 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-rose-100 transition hover:border-rose-300/80 disabled:opacity-60"
+                                                >
+                                                    {kickInProgressId === member.id
+                                                        ? t('actions.saving')
+                                                        : t('network.kick')}
+                                                </button>
+                                            )}
                                         </div>
                                     ))}
                                 </div>
-                                <div className="mt-5">
-                                    <label className="text-xs uppercase tracking-[0.2em] text-slate-400">
-                                        {t('network.leaveConfirm', { code: NETWORK_LEAVE_CODE })}
-                                    </label>
-                                    <input
-                                        className="valorant-input mt-2 w-full"
-                                        value={leaveConfirm}
-                                        onChange={(event) => setLeaveConfirm(event.target.value)}
-                                        placeholder={t('network.leavePlaceholder')}
-                                    />
+                                <div className="mt-5 space-y-2">
                                     {xpRewards && (
-                                        <p className="mt-2 text-xs text-slate-400">
-                                            {t('network.leavePenalty', {
-                                                amount: xpRewards.networkMemberLeave,
+                                        <p className="text-xs text-slate-400">
+                                            {t('network.leavePenaltySelf', {
+                                                amount: xpRewards.networkMemberLeaveSelf,
                                             })}
                                         </p>
                                     )}
                                     <button
                                         type="button"
-                                        onClick={handleLeaveNetwork}
-                                        disabled={
-                                            leaveConfirm.trim().toLowerCase() !== NETWORK_LEAVE_CODE ||
-                                            networkLeaveLoading
-                                        }
-                                        className="mt-3 w-full rounded-full border border-rose-400/50 bg-rose-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-rose-200 disabled:cursor-not-allowed disabled:opacity-40"
+                                        onClick={() => {
+                                            setLeaveConfirm('');
+                                            setLeaveModalOpen(true);
+                                        }}
+                                        disabled={networkLeaveLoading}
+                                        className="w-full rounded-full border border-rose-400/50 bg-rose-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-rose-200 disabled:cursor-not-allowed disabled:opacity-40"
                                     >
                                         {networkLeaveLoading ? t('actions.saving') : t('network.leave')}
                                     </button>
@@ -2168,7 +2663,7 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                                                 >
                                                     <div>
                                                         <p className="text-sm font-semibold text-white">
-                                                            {request.sender.username}
+                                                            {formatUsername(request.sender.username)}
                                                         </p>
                                                         <p className="text-xs text-slate-400">
                                                             {t('network.requestDate', {
@@ -2210,16 +2705,16 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                                             networkState.outgoing.map((request) => (
                                                 <div
                                                     key={request.id}
-                                                    className="flex items-center justify-between rounded-xl border border-white/5 bg-white/5 px-3 py-2"
-                                                >
-                                                    <div>
-                                                        <p className="text-sm font-semibold text-white">
-                                                            {request.recipient.username}
-                                                        </p>
-                                                        <p className="text-xs text-slate-400">
-                                                            {t('network.requestDate', {
-                                                                date: formatRequestDate(request.createdAt),
-                                                            })}
+                                                className="flex items-center justify-between rounded-xl border border-white/5 bg-white/5 px-3 py-2"
+                                            >
+                                                <div>
+                                                    <p className="text-sm font-semibold text-white">
+                                                        {formatUsername(request.recipient.username)}
+                                                    </p>
+                                                    <p className="text-xs text-slate-400">
+                                                        {t('network.requestDate', {
+                                                            date: formatRequestDate(request.createdAt),
+                                                        })}
                                                         </p>
                                                     </div>
                                                     <button
@@ -2239,9 +2734,26 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                                 </div>
                             </div>
                             <div className="rounded-2xl border border-white/10 bg-[#060714] p-4">
-                                <p className="text-xs uppercase tracking-[0.2em] text-slate-400">
-                                    {t('network.searchTitle')}
-                                </p>
+                                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                    <div>
+                                        <p className="text-xs uppercase tracking-[0.2em] text-slate-400">
+                                            {t('network.searchTitle')}
+                                        </p>
+                                        <p className="text-xs text-slate-300">
+                                            {badgesVisible
+                                                ? t('network.searchVisibleHint')
+                                                : t('network.searchHiddenHint')}
+                                        </p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={handleToggleBadgeVisibility}
+                                        disabled={badgeVisibilitySaving}
+                                        className="rounded-full border border-white/20 px-3 py-1 text-[0.7rem] font-semibold uppercase tracking-[0.2em] text-white transition hover:border-cyan-300/60 disabled:opacity-60"
+                                    >
+                                        {badgesVisible ? t('network.searchVisible') : t('network.searchHidden')}
+                                    </button>
+                                </div>
                                 <input
                                     className="valorant-input mt-3 w-full"
                                     placeholder={t('network.searchPlaceholder')}
@@ -2263,9 +2775,21 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                                                 key={candidate.id}
                                                 className="flex items-center justify-between rounded-xl border border-white/5 bg-white/5 px-3 py-2"
                                             >
-                                                <p className="text-sm font-semibold text-white">
-                                                    {candidate.username}
-                                                </p>
+                                                <div className="space-y-1">
+                                                    <p className="text-sm font-semibold text-white">
+                                                        {formatUsername(candidate.username)}
+                                                    </p>
+                                                    {candidate.badgesVisibleInSearch && (
+                                                        <div className="flex flex-wrap gap-2">
+                                                            {candidate.badges?.og && (
+                                                                <BadgePill type="og" compact />
+                                                            )}
+                                                            {candidate.badges?.referral && (
+                                                                <BadgePill type="referral" compact />
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                </div>
                                                 <button
                                                     type="button"
                                                     onClick={() => handleSendFriendRequest(candidate.id)}
@@ -2382,6 +2906,8 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                         {players.map((player, index) => {
                             const selected = selectedPlayerIds.has(player.id);
                             const momentum = momentumMap[getPlayerKey(player)] ?? 0;
+                            const momentumKey = getPlayerKey(player);
+                            const momentumHighlight = momentumHighlights.has(momentumKey);
                             const isEditing = editingPlayerId === player.id;
                             const showMomentum = Math.abs(momentum) > 0.01;
                             return (
@@ -2448,7 +2974,11 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                                                 </p>
                                                 {showMomentum && (
                                                     <p
-                                                        className="text-xs text-cyan-300"
+                                                        className={`text-xs transition-all duration-300 ${
+                                                            momentumHighlight
+                                                                ? 'text-cyan-100'
+                                                                : 'text-cyan-300'
+                                                        }`}
                                                         title={t('players.momentumTooltip')}
                                                     >
                                                         {t('players.momentumLabel')}:{' '}
@@ -2725,7 +3255,7 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                                 disabled={!teamsReady}
                                 className="rounded-full border border-white/15 bg-white/5 px-3 py-2 text-lg text-white transition hover:border-white/40 disabled:cursor-not-allowed disabled:opacity-60"
                             >
-                                <span aria-hidden="true">📸</span>
+                                <FiCamera aria-hidden="true" />
                                 <span className="sr-only">{t('actions.copyTeamsImage')}</span>
                             </button>
                             <XpDot
@@ -3043,11 +3573,14 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                         const isCanceled = match.status === 'canceled';
                         const statusLabel = isCanceled ? t('matches.canceled') : winnerLabel(match.winner);
                         const statusClasses = isCanceled ? 'text-[#ff9aa4]' : 'text-slate-200';
+                        const fresh = recentMatchHighlights.has(match.id);
                         return (
                             <div
                                 key={match.id}
                                 ref={(el) => registerMatchCardRef(match.id, el)}
-                                className="rounded-2xl border border-white/15 bg-white/10 p-4 text-slate-100"
+                                className={`rounded-2xl border border-white/15 bg-white/10 p-4 text-slate-100 transition-all duration-300 ${
+                                    fresh ? 'ring-2 ring-cyan-400/60 shadow-[0_10px_30px_rgba(0,246,255,0.25)]' : ''
+                                }`}
                             >
                             <div className="flex flex-wrap items-center justify-between gap-2 text-xs tracking-[0.12em] text-slate-200">
                                 <span>{new Date(match.created_at).toLocaleString()}</span>
@@ -3100,7 +3633,7 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                                             onClick={() => copyMatchImage(match.id)}
                                             className="rounded-full border border-white/15 bg-white/5 px-3 py-2 text-lg text-white transition hover:border-white/40 disabled:cursor-not-allowed disabled:opacity-60"
                                         >
-                                            <span aria-hidden="true">📸</span>
+                                            <FiCamera aria-hidden="true" />
                                             <span className="sr-only">{t('actions.copyMatchImage')}</span>
                                         </button>
                                         <XpDot
@@ -3145,6 +3678,51 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                 onClose={() => setResultModalOpen(false)}
                 onConfirm={handleModalConfirm}
             />
+            {leaveModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-6">
+                    <div className="w-full max-w-md rounded-3xl border border-white/10 bg-[#0f101a] p-6 text-white shadow-2xl">
+                        <h3 className="text-xl font-semibold">{t('network.leaveTitle')}</h3>
+                        <p className="mt-2 text-sm text-slate-200">
+                            {t('network.leaveDescription', {
+                                code: NETWORK_LEAVE_CODE.toUpperCase(),
+                            })}
+                        </p>
+                        {xpRewards && (
+                            <p className="mt-3 text-xs text-amber-200">
+                                {t('network.leavePenaltySelf', {
+                                    amount: xpRewards.networkMemberLeaveSelf,
+                                })}
+                            </p>
+                        )}
+                        <input
+                            className="valorant-input mt-4 w-full uppercase"
+                            placeholder={t('network.leavePlaceholder')}
+                            value={leaveConfirm}
+                            onChange={(event) => setLeaveConfirm(event.target.value)}
+                        />
+                        <div className="mt-4 flex gap-3">
+                            <button
+                                type="button"
+                                onClick={() => setLeaveModalOpen(false)}
+                                className="valorant-btn-outline w-full px-4 py-2 text-xs"
+                            >
+                                {t('actions.cancel')}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleLeaveNetwork}
+                                disabled={
+                                    leaveConfirm.trim().toLowerCase() !== NETWORK_LEAVE_CODE ||
+                                    networkLeaveLoading
+                                }
+                                className="valorant-btn-primary w-full px-4 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                {networkLeaveLoading ? t('actions.saving') : t('actions.confirm')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
             {deleteModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-6">
                     <div className="w-full max-w-md rounded-3xl border border-white/10 bg-[#0f101a] p-6 text-white shadow-2xl">
