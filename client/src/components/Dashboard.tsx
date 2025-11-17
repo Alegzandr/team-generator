@@ -426,13 +426,8 @@ const Dashboard = () => {
         new Set()
     );
     const [badgeVisibilitySaving, setBadgeVisibilitySaving] = useState(false);
-    const [usernameCopied, setUsernameCopied] = useState<'idle' | 'copied' | 'error'>(
-        'idle'
-    );
-    const usernameCopyTimerRef = useRef<number | null>(null);
     const momentumMapRef = useRef<Record<string, number>>({});
     const matchHighlightTimersRef = useRef<Record<number, number>>({});
-    const scrollDirectionRef = useRef<number>(0);
 
     const activeMomentumGame = mapSelectionEnabled ? selectedGame : undefined;
 
@@ -804,9 +799,6 @@ const Dashboard = () => {
 
     useEffect(() => {
         return () => {
-            if (usernameCopyTimerRef.current) {
-                window.clearTimeout(usernameCopyTimerRef.current);
-            }
             Object.values(matchHighlightTimersRef.current).forEach((timer) => {
                 window.clearTimeout(timer);
             });
@@ -1303,9 +1295,6 @@ const Dashboard = () => {
 
     const handleCopyUsername = useCallback(async () => {
         if (!user) return;
-        if (usernameCopyTimerRef.current) {
-            window.clearTimeout(usernameCopyTimerRef.current);
-        }
         try {
             if (navigator.clipboard?.writeText) {
                 await navigator.clipboard.writeText(user.username);
@@ -1319,16 +1308,9 @@ const Dashboard = () => {
                 document.execCommand('copy');
                 document.body.removeChild(textarea);
             }
-            setUsernameCopied('copied');
             pushToast(t('app.usernameCopied'), 'success');
         } catch (error) {
-            setUsernameCopied('error');
             pushToast(t('app.usernameCopyError'), 'error');
-        } finally {
-            usernameCopyTimerRef.current = window.setTimeout(
-                () => setUsernameCopied('idle'),
-                2400
-            );
         }
     }, [user, pushToast, t]);
 
