@@ -2040,9 +2040,14 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                                 {t('network.title')}
                             </p>
                             <p className="text-sm font-semibold text-white">
-                                {t('network.membersLabel', {
-                                    count: networkState?.members.length ?? 0,
-                                })}
+                                {t(
+                                    (networkState?.members.length ?? 0) === 1
+                                        ? 'network.members.singular'
+                                        : 'network.members.plural',
+                                    {
+                                        count: networkState?.members.length ?? 0,
+                                    }
+                                )}
                             </p>
                         </div>
                         <div className="flex items-center gap-3">
