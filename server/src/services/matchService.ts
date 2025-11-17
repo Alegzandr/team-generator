@@ -10,6 +10,7 @@ export type TeamPlayer = {
 export interface MatchRecord {
     id: number;
     user_id: string;
+    network_id: string;
     teamA: TeamPlayer[];
     teamB: TeamPlayer[];
     teamA_score: number;
@@ -24,6 +25,7 @@ export interface MatchRecord {
 interface MatchRow {
     id: number;
     user_id: string;
+    network_id: string;
     teamA: string;
     teamB: string;
     teamA_score: number;
@@ -38,6 +40,7 @@ interface MatchRow {
 const parseRow = (row: MatchRow): MatchRecord => ({
     id: row.id,
     user_id: row.user_id,
+    network_id: row.network_id,
     teamA: JSON.parse(row.teamA),
     teamB: JSON.parse(row.teamB),
     teamA_score: row.teamA_score ?? 0,
@@ -50,6 +53,7 @@ const parseRow = (row: MatchRow): MatchRecord => ({
 });
 
 export const createMatch = async (
+    networkId: string,
     userId: string,
     data: {
         teamA: TeamPlayer[];
@@ -69,9 +73,10 @@ export const createMatch = async (
     const mapName = data.map ?? null;
     const status = data.status ?? 'completed';
     const result = await runQuery(
-        `INSERT INTO matches (user_id, teamA, teamB, teamA_score, teamB_score, winner, game, map_name, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO matches (user_id, network_id, teamA, teamB, teamA_score, teamB_score, winner, game, map_name, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
             userId,
+            networkId,
             JSON.stringify(data.teamA),
             JSON.stringify(data.teamB),
             teamA_score,
@@ -94,22 +99,22 @@ export const createMatch = async (
     return parseRow(row);
 };
 
-export const getMatchesForUser = async (userId: string) => {
+export const getMatchesForNetwork = async (networkId: string) => {
     const rows = await allQuery<MatchRow>(
         `
-        SELECT id, user_id, teamA, teamB, teamA_score, teamB_score, winner, game, map_name, status, created_at
+        SELECT id, user_id, network_id, teamA, teamB, teamA_score, teamB_score, winner, game, map_name, status, created_at
         FROM matches
-        WHERE user_id = ?
+        WHERE network_id = ?
         ORDER BY datetime(created_at) DESC
     `,
-        [userId]
+        [networkId]
     );
 
     return rows.map(parseRow);
 };
 
 export const updateMatchWinner = async (
-    userId: string,
+    networkId: string,
     matchId: number,
     winner: MatchRecord['winner'],
     scores?: { teamA: number; teamB: number }
@@ -117,12 +122,12 @@ export const updateMatchWinner = async (
     const teamA_score = Number(scores?.teamA ?? 0);
     const teamB_score = Number(scores?.teamB ?? 0);
     await runQuery(
-        `UPDATE matches SET winner = ?, teamA_score = ?, teamB_score = ? WHERE id = ? AND user_id = ?`,
-        [winner, teamA_score, teamB_score, matchId, userId]
+        `UPDATE matches SET winner = ?, teamA_score = ?, teamB_score = ? WHERE id = ? AND network_id = ?`,
+        [winner, teamA_score, teamB_score, matchId, networkId]
     );
     const row = await getQuery<MatchRow>(
-        `SELECT id, user_id, teamA, teamB, teamA_score, teamB_score, winner, game, map_name, status, created_at FROM matches WHERE id = ? AND user_id = ?`,
-        [matchId, userId]
+        `SELECT id, user_id, network_id, teamA, teamB, teamA_score, teamB_score, winner, game, map_name, status, created_at FROM matches WHERE id = ? AND network_id = ?`,
+        [matchId, networkId]
     );
     if (!row) {
         throw new Error('Match not found');
@@ -130,17 +135,17 @@ export const updateMatchWinner = async (
     return parseRow(row);
 };
 
-export const deleteMatch = async (userId: string, matchId: number) => {
+export const deleteMatch = async (networkId: string, matchId: number) => {
     const existing = await getQuery<{ id: number }>(
-        `SELECT id FROM matches WHERE id = ? AND user_id = ?`,
-        [matchId, userId]
+        `SELECT id FROM matches WHERE id = ? AND network_id = ?`,
+        [matchId, networkId]
     );
     if (!existing) {
         return false;
     }
-    await runQuery(`DELETE FROM matches WHERE id = ? AND user_id = ?`, [
+    await runQuery(`DELETE FROM matches WHERE id = ? AND network_id = ?`, [
         matchId,
-        userId,
+        networkId,
     ]);
     return true;
 };

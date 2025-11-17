@@ -12,7 +12,7 @@ router.use(requireAuth);
 
 router.get('/', async (req, res) => {
     try {
-        const preferences = await getMapPreferences(req.authUser!.id);
+        const preferences = await getMapPreferences(req.authUser!.networkId);
         res.json(preferences);
     } catch (error) {
         res.status(500).json({ message: 'Failed to load map preferences' });
@@ -22,7 +22,7 @@ router.get('/', async (req, res) => {
 router.put('/', async (req, res) => {
     const body = (req.body || {}) as Partial<MapPreferencesRecord>;
     try {
-        const saved = await saveMapPreferences(req.authUser!.id, body);
+        const saved = await saveMapPreferences(req.authUser!.networkId, body);
         res.json(saved);
     } catch (error) {
         res.status(500).json({ message: 'Failed to save map preferences' });

@@ -4,34 +4,36 @@
 
 ## Feature Snapshot
 
--   **Discord OAuth login** – we only store your Discord ID, username, and avatar; an HttpOnly cookie carries the seven-day JWT so scripts can’t steal it.
--   **Saved & temporary rosters** – permanent players live in SQLite; temporary ones stay local to the browser. Both lists support inline edits, drag-and-drop reordering, “select all / clear all”, infinite scrolling, and 0‑10 skill ratings. Pagination (20 players/batch) keeps massive rosters smooth.
--   **Momentum-aware balancing** – recent matches (last 4h) nudge a player’s effective skill up/down, helping the algorithm keep squads fresh. Fresh sessions start with zero momentum, and the boost can be toggled off or scoped per game.
--   **Game-aware map picker** – optionally pick or roll a map for each match (Valorant, CS2, Rocket League, LoL, Overwatch 2, Siege). Users can ban maps per game, screenshot overlays capture the choice, and history stores the selected game/map/status for future reference.
--   **Drag-first team builder** – generate proposed teams, then drag players directly between columns (even to swap with a full roster). A fairness warning appears if skills drift too far apart, and post-screenshot locks make it clear when you must record or abandon the match.
--   **Clipboard-ready screenshots** – share the current teams or any match in history via a single camera button. The UI hides helper text automatically and falls back to downloading if the clipboard API is unavailable.
--   **Match scoring history** – saving or abandoning a match records rosters, map, and status (completed/canceled). Any entry can be edited, deleted, or copied as an image; canceled rows remain visible for audit trails.
--   **XP & referrals** – every saved match, screenshot, or player-management action grants (or sometimes removes) XP that fuels a level gauge. Inviting friends with a one-tap share link awards a referral bonus when they log in. XP changes stream in via WebSockets so multiple tabs stay in sync.
--   **Localization + GDPR** – English/French toggle, cookie consent banner, “delete everything” endpoint, and automatic inactive-user pruning keep the app compliant.
--   **Docker-ready** – one `docker compose up` brings up the API, client bundle, and reverse proxy.
+-   **Discord OAuth login** – we only store your Discord ID, username, and avatar; an HttpOnly cookie carries the seven‑day JWT so scripts can’t steal it.
+-   **Friend networks & shared history** – send realtime friend requests, accept them, and automatically form a small “network”. Everyone in the same network shares saved players, match history, momentum, and XP. Networks do not have names; you simply see a compact network list in the header plus a “Leave network” button with confirmation.
+-   **Saved & temporary rosters** – permanent players live in SQLite; temporary ones stay local to the browser. Both lists support inline edits, drag‑and‑drop reordering, select‑all/clear‑all, infinite scrolling, and 0–10 skill ratings.
+-   **Momentum‑aware balancing** – recent matches (last 4h) nudge a player’s effective skill. Momentum is shared across the network, so every member benefits from the same session history.
+-   **Game‑aware map picker** – pick or roll maps for Valorant, CS2, Rocket League, LoL, Overwatch 2, and Siege. Banned maps persist per game.
+-   **Drag‑first team builder** – generate teams, then drag players between columns to refine. A fairness warning appears when skills drift too far apart.
+-   **Clipboard‑ready screenshots** – share teams or match history entries with a single camera button.
+-   **Match scoring history** – completed and canceled matches are recorded, editable, and shareable. Network members see a unified match history.
+-   **XP, referrals & network actions** – XP is gained/lost for adding/removing network members, match activity, screenshots, roster actions, and referrals. XP changes stream in via WebSockets for all members.
+-   **Social header UI** – shows pending friend requests, a network member list, and a user search for adding friends in realtime.
+-   **Localization + GDPR** – English/French toggle, consent banner, data deletion, and automatic pruning of inactive users.
+-   **Docker‑ready** – single `docker compose up` runs the API, client bundle, and reverse proxy.
 
 ## Tech Stack
 
--   **Frontend**: React 19 + Vite + TypeScript, Tailwind CSS v4, custom contexts (Auth, Language, Toast).
--   **Backend**: Node 20, Express, Passport (Discord), JWT, SQLite (`sqlite3`), cookie-based session for OAuth handshake.
--   **Infra**: Docker, Docker Compose, Nginx (serves static client + proxies `/api` to the server) plus a friendly `robots.txt` that keeps `/api` out of search results.
+-   **Frontend**: React 19 + Vite + TypeScript, Tailwind CSS v4, contexts (Auth, Language, Toast, Network/Social).
+-   **Backend**: Node 20, Express, Passport (Discord), JWT, SQLite, WebSocket layer for XP + friend/network events.
+-   **Infra**: Docker, Nginx (static client + `/api` proxy), robots.txt blocking API indexing.
 
 ## Local Development
 
 ### Prerequisites
 
--   Node.js 20+
+-   Node 20+
 -   npm 10+
--   Discord application (register redirect URI `http://localhost:3000/api/auth/discord/callback`)
+-   Discord application (redirect URI `http://localhost:3000/api/auth/discord/callback`)
 
 ### Environment files
 
-`server/.env` (example in repo):
+`server/.env`
 
 ```env
 PORT=3000
@@ -52,7 +54,7 @@ GDPR_RETENTION_DAYS=90
 GDPR_RETENTION_CHECK_HOURS=24
 ```
 
-`client/.env`:
+`client/.env`
 
 ```env
 VITE_API_URL=http://localhost:3000
@@ -61,94 +63,76 @@ VITE_API_URL=http://localhost:3000
 ### Run it
 
 ```bash
-# API
-cd server
-npm install
-npm run dev
-
-# Client (new shell)
-cd client
-npm install
-npm run dev
+cd server && npm install && npm run dev
+cd client && npm install && npm run dev
 ```
 
 -   API: `http://localhost:3000`
 -   UI: `http://localhost:5173`
 
-### GDPR data retention
-
--   `GDPR_RETENTION_DAYS` (default **90**) controls when an inactive Discord account is purged along with its matches/players. Set to `0` or a negative value to disable automatic cleanup (not recommended).
--   `GDPR_RETENTION_CHECK_HOURS` (default **24**) controls how often the cleanup job runs.
--   Activity is refreshed on every authenticated API call, so active users are never deleted automatically.
--   `JWT_TTL_DAYS` + `COOKIE_MAX_AGE_DAYS` keep browser sessions alive; set both lower if you want short-lived tokens.
--   `COOKIE_SECURE=true` (and `SESSION_COOKIE_SECURE=true`) should be enabled in production behind HTTPS so cookies are only sent over TLS. Provide `COOKIE_DOMAIN` if the API sits on a subdomain.
-
 ## Docker
 
-### Dev stack (live reload)
-
-Spin up both Vite and the Express API with file watchers using the dedicated compose file:
+### Dev mode
 
 ```bash
 docker compose -f docker-compose.dev.yml up --build
 ```
 
--   API: `http://localhost:3000`
--   Vite dev server: `http://localhost:5173`
--   Source folders are bind-mounted, and node_modules live inside the containers to keep host folders clean.
-
-### Production stack (Nginx + reverse proxy)
+### Production
 
 ```bash
 docker compose up --build
 ```
 
--   Nginx serves the built client at `http://localhost:8080` and proxies `/api/*` to the Express server.
--   SQLite data persists under `server/data/` thanks to the bind-mounted volume.
-
 ## API Summary
 
-| Method                | Endpoint                     | Notes                                                        |
-| --------------------- | ---------------------------- | ------------------------------------------------------------ |
-| GET                   | `/api/auth/discord`          | Kick off OAuth                                               |
-| GET                   | `/api/auth/discord/callback` | Finalize OAuth, issue JWT                                    |
-| GET                   | `/api/user`                  | Current user (requires JWT)                                  |
-| DELETE                | `/api/user`                  | Remove user + saved data (GDPR)                              |
-| GET/POST/PATCH/DELETE | `/api/players`               | CRUD for saved players (`GET` accepts `limit`/`offset`, defaults 20, returns `{ players, total }`) |
-| GET/POST/PATCH/DELETE | `/api/matches`               | List, store, update, delete match results (scores + rosters + map info) |
-| GET/PUT               | `/api/maps/preferences`      | Fetch or persist per-game banned maps for the picker |
-| GET                   | `/api/xp`                    | Current XP total (powers the level gauge)                     |
-| GET                   | `/api/xp/rewards`            | XP amounts for matches, screenshots, roster changes, referrals |
-| POST                  | `/api/xp/events`             | Claim XP for share/screenshot events (server validates spam guards) |
-| POST                  | `/api/xp/referrals/claim`    | Credit a referrer once the invitee logs in                   |
-| WebSocket             | `/ws`                        | Authenticated XP updates pushed to every open tab            |
-
-Browser clients must send `credentials: 'include'` so the HttpOnly `COOKIE_NAME` authentication cookie is attached to API calls; no `Authorization` header is necessary.
+| Method                | Endpoint                            | Notes                                     |
+| --------------------- | ----------------------------------- | ----------------------------------------- |
+| GET                   | `/api/auth/discord`                 | Kick off OAuth                            |
+| GET                   | `/api/auth/discord/callback`        | Finalize OAuth                            |
+| GET                   | `/api/user`                         | Current user                              |
+| DELETE                | `/api/user`                         | GDPR deletion                             |
+| GET/POST/PATCH/DELETE | `/api/players`                      | CRUD players                              |
+| GET/POST/PATCH/DELETE | `/api/matches`                      | CRUD matches (shared within network)      |
+| GET/PUT               | `/api/maps/preferences`             | Map bans                                  |
+| GET                   | `/api/xp`                           | XP total (network‑adjusted if in network) |
+| GET                   | `/api/xp/rewards`                   | Reward table                              |
+| POST                  | `/api/xp/events`                    | XP claim events                           |
+| POST                  | `/api/xp/referrals/claim`           | Referral credits                          |
+| GET                   | `/api/network`                      | Network snapshot                          |
+| POST                  | `/api/network/leave`                | Leave network                             |
+| GET                   | `/api/network/requests`             | List friend requests                      |
+| POST                  | `/api/network/requests`             | Send friend request                       |
+| POST                  | `/api/network/requests/:id/accept`  | Accept                                    |
+| POST                  | `/api/network/requests/:id/decline` | Decline/cancel                            |
+| GET                   | `/api/network/search`               | Search users                              |
+| WebSocket             | `/ws`                               | XP + social updates                       |
 
 ## Database (SQLite)
 
-| Table     | Columns                                                                                 |
-| --------- | --------------------------------------------------------------------------------------- |
-| `users`   | `id`, `username`, `avatar`, `last_active`, `token_version`, `xp_total`                  |
-| `players` | `id`, `user_id`, `name`, `skill` (0‑10)                                                  |
-| `matches` | `id`, `user_id`, `teamA`, `teamB`, `teamA_score`, `teamB_score`, `winner`, `game`, `map_name`, `created_at` |
-| `map_preferences` | `user_id`, `preferences` (JSON blob of banned maps per title)                               |
-| `xp_events` | `id`, `user_id`, `type`, `context`, `amount`, `created_at`                                      |
-| `referrals` | `id`, `referrer_id`, `referred_id`, `created_at`                                                 |
-
-Foreign keys cascade so GDPR deletion wipes dependent rows automatically.
+| Table             | Columns                                                                       |
+| ----------------- | ----------------------------------------------------------------------------- |
+| `users`           | id, username, avatar, last_active, token_version, xp_total                    |
+| `players`         | id, user_id, name, skill                                                      |
+| `matches`         | id, user_id, teamA, teamB, scores, game, map_name, created_at, **network_id** |
+| `map_preferences` | user_id, preferences                                                          |
+| `xp_events`       | id, user_id, type, context, amount, created_at, **network_id**                |
+| `referrals`       | id, referrer_id, referred_id, created_at                                      |
+| `networks`        | id, created_at                                                                |
+| `network_members` | network_id, user_id, joined_at, left_at                                       |
+| `friend_requests` | id, from_user_id, to_user_id, status, created_at, responded_at                |
 
 ## Scripts
 
-| Location | Command           | Purpose             |
-| -------- | ----------------- | ------------------- |
-| server   | `npm run dev`     | Express + ts-node   |
-|          | `npm run build`   | Compile to `dist/`  |
-|          | `npm start`       | Run compiled server |
-| client   | `npm run dev`     | Vite dev server     |
-|          | `npm run build`   | Production bundle   |
-|          | `npm run preview` | Preview prod build  |
+| Location | Command           | Purpose          |
+| -------- | ----------------- | ---------------- |
+| server   | `npm run dev`     | Dev server       |
+| server   | `npm run build`   | Build            |
+| server   | `npm start`       | Run built server |
+| client   | `npm run dev`     | Vite dev         |
+| client   | `npm run build`   | Production build |
+| client   | `npm run preview` | Preview          |
 
 ---
 
-We intentionally kept the feature set lean: optimize for quick team generation, drag-and-drop tweaks, and simple score tracking. Extend it however you like—Discord bot hooks, richer analytics, or new balancing strategies can all build on top of this foundation.
+This project now supports full small‑group networking: shared players, shared history, shared momentum, unified XP, and realtime social features.

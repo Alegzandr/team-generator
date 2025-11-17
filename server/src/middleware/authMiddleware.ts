@@ -14,6 +14,7 @@ export interface AuthenticatedUser {
     username: string;
     avatar: string | null;
     xp_total?: number;
+    networkId: string;
 }
 
 declare global {
@@ -70,6 +71,7 @@ export const requireAuth: RequestHandler = async (
             username: storedUser.username,
             avatar: storedUser.avatar,
             xp_total: storedUser.xp_total,
+            networkId: storedUser.network_id,
         };
         await touchUserActivity(storedUser.id);
         next();

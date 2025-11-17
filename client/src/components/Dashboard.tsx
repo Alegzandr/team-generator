@@ -17,6 +17,8 @@ import type {
     MapPreferences,
     Match,
     MatchSaveResponse,
+    NetworkMember,
+    NetworkState,
     Player,
     PlayerMutationResponse,
     TeamPlayer,
@@ -48,11 +50,17 @@ const DRAG_DATA_FORMAT = 'application/x-team-generator';
 const DASHBOARD_SETTINGS_KEY = 'team-generator:dashboard-settings';
 const PLAYERS_PAGE_SIZE = 20;
 const createDefaultMapPreferences = (): MapPreferences => ({ banned: {} });
+const NETWORK_LEAVE_CODE = 'leave';
 
 type DragPayload =
     | { type: 'team'; from: 'teamA' | 'teamB'; player: TeamPlayer }
     | { type: 'saved'; playerId: number }
     | { type: 'temporary'; tempId: string; fromList: 'temporary' | 'saved' };
+
+interface NetworkResponseEnvelope {
+    state?: NetworkState;
+    xp?: XpSummary;
+}
 
 const encodeDragPayload = (payload: DragPayload) => JSON.stringify(payload);
 const decodeDragPayload = (data?: string | null): DragPayload | null => {
@@ -108,6 +116,17 @@ const sanitizeTeam = (team: TeamPlayer[]) =>
         skill,
         temporary: Boolean(temporary),
     }));
+
+const formatRequestDate = (value: string) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+        return value;
+    }
+    return date.toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+    });
+};
 
 const calculateMomentumMap = (
     matches: Match[],
@@ -256,7 +275,7 @@ const isSamePlayer = (a: TeamPlayer, b: TeamPlayer) => {
 };
 
 const Dashboard = () => {
-    const { user, logout } = useAuth();
+    const { user, logout, refreshUser } = useAuth();
     const { t, language, setLanguage } = useLanguage();
     const { pushToast } = useToast();
 
@@ -357,6 +376,17 @@ const Dashboard = () => {
         y: number;
     } | null>(null);
     const [xpRewards, setXpRewards] = useState<XpRewards | null>(null);
+    const [networkState, setNetworkState] = useState<NetworkState | null>(null);
+    const [networkStateLoading, setNetworkStateLoading] = useState(false);
+    const [networkPanelOpen, setNetworkPanelOpen] = useState(false);
+    const [networkSearchQuery, setNetworkSearchQuery] = useState('');
+    const [networkSearchResults, setNetworkSearchResults] = useState<NetworkMember[]>([]);
+    const [networkSearchLoading, setNetworkSearchLoading] = useState(false);
+    const networkSearchTimerRef = useRef<number | null>(null);
+    const [networkActionRequestId, setNetworkActionRequestId] = useState<number | null>(null);
+    const [networkSendingRequest, setNetworkSendingRequest] = useState(false);
+    const [networkLeaveLoading, setNetworkLeaveLoading] = useState(false);
+    const [leaveConfirm, setLeaveConfirm] = useState('');
 
     const activeMomentumGame = mapSelectionEnabled ? selectedGame : undefined;
 
@@ -462,6 +492,22 @@ const Dashboard = () => {
         [logout]
     );
 
+    const refreshNetworkState = useCallback(async () => {
+        if (!user) {
+            setNetworkState(null);
+            return;
+        }
+        setNetworkStateLoading(true);
+        try {
+            const state = await apiRequest<NetworkState>('/api/social/state');
+            setNetworkState(state);
+        } catch (error) {
+            console.error('Failed to load network state', error);
+        } finally {
+            setNetworkStateLoading(false);
+        }
+    }, [apiRequest, user]);
+
     const applyXpSummary = useCallback((summary?: XpSummary) => {
         if (!summary) return;
         setXpState(calculateLevelState(summary.total));
@@ -488,6 +534,107 @@ const Dashboard = () => {
         },
         [apiRequest]
     );
+
+    const processNetworkResponse = useCallback(
+        (payload?: NetworkResponseEnvelope) => {
+            if (payload?.state) {
+                setNetworkState(payload.state);
+            }
+            if (payload?.xp) {
+                handleXpEnvelope({ xp: payload.xp });
+            }
+        },
+        [handleXpEnvelope]
+    );
+
+    const handleSendFriendRequest = useCallback(
+        async (targetId: string) => {
+            if (!targetId || networkSendingRequest) {
+                return;
+            }
+            setNetworkSendingRequest(true);
+            try {
+                const response = await apiRequest<NetworkResponseEnvelope>('/api/social/requests', {
+                    method: 'POST',
+                    body: JSON.stringify({ userId: targetId }),
+                });
+                processNetworkResponse(response);
+                setNetworkSearchQuery('');
+                setNetworkSearchResults([]);
+                pushToast(t('network.requestSent'), 'success');
+            } catch (error) {
+                console.error('Failed to send friend request', error);
+                pushToast(t('feedback.error'), 'error');
+            } finally {
+                setNetworkSendingRequest(false);
+            }
+        },
+        [apiRequest, networkSendingRequest, processNetworkResponse, pushToast, t]
+    );
+
+    const handleAcceptFriendRequest = useCallback(
+        async (requestId: number) => {
+            setNetworkActionRequestId(requestId);
+            try {
+                const response = await apiRequest<NetworkResponseEnvelope>(
+                    `/api/social/requests/${requestId}/accept`,
+                    { method: 'POST' }
+                );
+                processNetworkResponse(response);
+                pushToast(t('network.memberAdded'), 'success');
+            } catch (error) {
+                console.error('Failed to accept request', error);
+                pushToast(t('feedback.error'), 'error');
+            } finally {
+                setNetworkActionRequestId(null);
+            }
+        },
+        [apiRequest, processNetworkResponse, pushToast, t]
+    );
+
+    const handleDismissFriendRequest = useCallback(
+        async (requestId: number) => {
+            setNetworkActionRequestId(requestId);
+            try {
+                const response = await apiRequest<NetworkResponseEnvelope>(
+                    `/api/social/requests/${requestId}`,
+                    { method: 'DELETE' }
+                );
+                processNetworkResponse(response);
+            } catch (error) {
+                console.error('Failed to update request', error);
+                pushToast(t('feedback.error'), 'error');
+            } finally {
+                setNetworkActionRequestId(null);
+            }
+        },
+        [apiRequest, processNetworkResponse, pushToast, t]
+    );
+
+    const handleLeaveNetwork = useCallback(async () => {
+        if (
+            leaveConfirm.trim().toLowerCase() !== NETWORK_LEAVE_CODE ||
+            networkLeaveLoading
+        ) {
+            return;
+        }
+        setNetworkLeaveLoading(true);
+        try {
+            const response = await apiRequest<NetworkResponseEnvelope>('/api/social/leave', {
+                method: 'POST',
+                body: JSON.stringify({ confirm: NETWORK_LEAVE_CODE }),
+            });
+            processNetworkResponse(response);
+            setLeaveConfirm('');
+            setNetworkPanelOpen(false);
+            pushToast(t('network.left'), 'info');
+        } catch (error) {
+            console.error('Failed to leave network', error);
+            pushToast(t('feedback.error'), 'error');
+        } finally {
+            setNetworkLeaveLoading(false);
+        }
+    }, [apiRequest, leaveConfirm, networkLeaveLoading, processNetworkResponse, pushToast, t]);
 
     const showXpTooltip = useCallback(
         (request: XpTooltipRequest) => {
@@ -622,6 +769,8 @@ const Dashboard = () => {
                     const data = JSON.parse(event.data);
                     if (data?.type === 'xp:update') {
                         applyXpSummary(data.payload as XpSummary);
+                    } else if (data?.type === 'social:update') {
+                        refreshNetworkState();
                     }
                 } catch (error) {
                     console.error('Failed to parse XP stream payload', error);
@@ -645,7 +794,7 @@ const Dashboard = () => {
             }
             socket?.close();
         };
-    }, [user, applyXpSummary]);
+    }, [user, applyXpSummary, refreshNetworkState]);
 
     const ensureMatchReady = () => {
         if (!teamsReady) {
@@ -909,6 +1058,30 @@ const Dashboard = () => {
         [user, apiRequest, pushToast, t]
     );
 
+    const fetchMatches = useCallback(async () => {
+        setMatchesLoading(true);
+        try {
+            const data = await apiRequest<Match[]>('/api/matches');
+            setMatches(data);
+        } catch (error) {
+            pushToast(t('feedback.error'), 'error');
+        } finally {
+            setMatchesLoading(false);
+        }
+    }, [apiRequest, pushToast, t]);
+
+    const fetchMapPreferences = useCallback(async () => {
+        setMapPreferencesLoading(true);
+        try {
+            const data = await apiRequest<MapPreferences>('/api/maps/preferences');
+            setMapPreferences(data);
+        } catch {
+            setMapPreferences(createDefaultMapPreferences());
+        } finally {
+            setMapPreferencesLoading(false);
+        }
+    }, [apiRequest]);
+
     useEffect(() => {
         if (!user) {
             setPlayers([]);
@@ -919,37 +1092,29 @@ const Dashboard = () => {
             setMapPreferences(createDefaultMapPreferences());
             setMapSelectionEnabled(false);
             setSelectedMap(null);
+            setNetworkState(null);
+            setNetworkPanelOpen(false);
+            setLeaveConfirm('');
             return;
         }
 
-        const loadMatches = async () => {
-            setMatchesLoading(true);
-            try {
-                const data = await apiRequest<Match[]>('/api/matches');
-                setMatches(data);
-            } catch (error) {
-                pushToast(t('feedback.error'), 'error');
-            } finally {
-                setMatchesLoading(false);
-            }
-        };
-
-        const loadMapPreferences = async () => {
-            setMapPreferencesLoading(true);
-            try {
-                const data = await apiRequest<MapPreferences>('/api/maps/preferences');
-                setMapPreferences(data);
-            } catch {
-                setMapPreferences(createDefaultMapPreferences());
-            } finally {
-                setMapPreferencesLoading(false);
-            }
-        };
-
         fetchPlayers(true);
-        loadMatches();
-        loadMapPreferences();
-    }, [user, t, pushToast, fetchPlayers]);
+        fetchMatches();
+        fetchMapPreferences();
+        refreshNetworkState();
+    }, [user, fetchPlayers, fetchMatches, fetchMapPreferences, refreshNetworkState]);
+
+    useEffect(() => {
+        if (!user || !networkState) {
+            return;
+        }
+        if (user.networkId !== networkState.networkId) {
+            refreshUser().catch(() => undefined);
+            fetchPlayers(true);
+            fetchMatches();
+            fetchMapPreferences();
+        }
+    }, [user, networkState, refreshUser, fetchPlayers, fetchMatches, fetchMapPreferences]);
 
     useEffect(() => {
         setSelectedPlayerIds((prev) => {
@@ -1030,6 +1195,47 @@ const Dashboard = () => {
             setSelectedMap(null);
         }
     }, [mapSelectionEnabled, mapPreferences, selectedMap, selectedGame, mapOptions]);
+
+    useEffect(() => {
+        if (!user) {
+            setNetworkSearchResults([]);
+            setNetworkSearchLoading(false);
+            return;
+        }
+        if (networkSearchTimerRef.current) {
+            window.clearTimeout(networkSearchTimerRef.current);
+            networkSearchTimerRef.current = null;
+        }
+        const trimmed = networkSearchQuery.trim();
+        if (trimmed.length < 2) {
+            setNetworkSearchResults([]);
+            setNetworkSearchLoading(false);
+            return;
+        }
+        setNetworkSearchLoading(true);
+        networkSearchTimerRef.current = window.setTimeout(() => {
+            const fetchResults = async () => {
+                try {
+                    const results = await apiRequest<NetworkMember[]>(
+                        `/api/social/search?q=${encodeURIComponent(trimmed)}`
+                    );
+                    setNetworkSearchResults(results);
+                } catch (error) {
+                    console.error('Failed to search network users', error);
+                    setNetworkSearchResults([]);
+                } finally {
+                    setNetworkSearchLoading(false);
+                }
+            };
+            fetchResults();
+        }, 350);
+        return () => {
+            if (networkSearchTimerRef.current) {
+                window.clearTimeout(networkSearchTimerRef.current);
+                networkSearchTimerRef.current = null;
+            }
+        };
+    }, [networkSearchQuery, apiRequest, user]);
 
     const togglePlayerSelection = (playerId: number) => {
         setSelectedPlayerIds((prev) => {
@@ -1826,6 +2032,259 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                             </div>
                         </div>
                     </div>
+                </div>
+                <div className="mt-5 rounded-2xl border border-white/10 bg-white/5 p-4">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                        <div>
+                            <p className="text-xs uppercase tracking-[0.15em] text-slate-300">
+                                {t('network.title')}
+                            </p>
+                            <p className="text-sm font-semibold text-white">
+                                {t('network.membersLabel', {
+                                    count: networkState?.members.length ?? 0,
+                                })}
+                            </p>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <div className="flex -space-x-3">
+                                {networkStateLoading && (
+                                    <div className="h-9 w-9 rounded-full border border-white/10 bg-white/10 animate-pulse" />
+                                )}
+                                {(networkState?.members || []).slice(0, 5).map((member) => (
+                                    member.avatar ? (
+                                        <img
+                                            key={member.id}
+                                            src={`https://cdn.discordapp.com/avatars/${member.id}/${member.avatar}.png`}
+                                            alt={member.username}
+                                            className="h-9 w-9 rounded-full border border-white/10"
+                                        />
+                                    ) : (
+                                        <div
+                                            key={member.id}
+                                            className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/10 text-xs font-semibold text-white"
+                                        >
+                                            {member.username.slice(0, 2).toUpperCase()}
+                                        </div>
+                                    )
+                                ))}
+                                {!networkStateLoading && !networkState?.members?.length && (
+                                    <div className="h-9 w-9 rounded-full border border-dashed border-white/10 bg-white/5 text-center text-[0.6rem] uppercase tracking-[0.2em] text-slate-400">
+                                        {t('network.emptyTag')}
+                                    </div>
+                                )}
+                            </div>
+                            <button
+                                type="button"
+                                className="rounded-full border border-white/10 bg-black/20 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white hover:border-white/40"
+                                onClick={() => setNetworkPanelOpen((prev) => !prev)}
+                                disabled={networkStateLoading || !networkState}
+                            >
+                                {networkPanelOpen ? t('actions.close') : t('network.manage')}
+                            </button>
+                        </div>
+                    </div>
+                    {networkPanelOpen && (
+                        <div className="mt-4 grid gap-4 lg:grid-cols-3">
+                            <div className="rounded-2xl border border-white/10 bg-[#060714] p-4">
+                                <p className="text-xs uppercase tracking-[0.15em] text-slate-400">
+                                    {t('network.membersTitle')}
+                                </p>
+                                <div className="mt-3 flex flex-col gap-2">
+                                    {(networkState?.members || []).map((member) => (
+                                        <div
+                                            key={member.id}
+                                            className="flex items-center justify-between rounded-xl border border-white/5 bg-white/5 px-3 py-2"
+                                        >
+                                            <div className="flex items-center gap-3">
+                                                {member.avatar ? (
+                                                    <img
+                                                        src={`https://cdn.discordapp.com/avatars/${member.id}/${member.avatar}.png`}
+                                                        alt={member.username}
+                                                        className="h-8 w-8 rounded-full border border-white/10"
+                                                    />
+                                                ) : (
+                                                    <div className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/10 text-xs font-semibold text-white">
+                                                        {member.username.slice(0, 2).toUpperCase()}
+                                                    </div>
+                                                )}
+                                                <div>
+                                                    <p className="text-sm font-semibold text-white">{member.username}</p>
+                                                    {member.id === user?.id && (
+                                                        <span className="text-[0.6rem] uppercase tracking-[0.3em] text-cyan-300">
+                                                            {t('network.youTag')}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="mt-5">
+                                    <label className="text-xs uppercase tracking-[0.2em] text-slate-400">
+                                        {t('network.leaveConfirm', { code: NETWORK_LEAVE_CODE })}
+                                    </label>
+                                    <input
+                                        className="valorant-input mt-2 w-full"
+                                        value={leaveConfirm}
+                                        onChange={(event) => setLeaveConfirm(event.target.value)}
+                                        placeholder={t('network.leavePlaceholder')}
+                                    />
+                                    {xpRewards && (
+                                        <p className="mt-2 text-xs text-slate-400">
+                                            {t('network.leavePenalty', {
+                                                amount: xpRewards.networkMemberLeave,
+                                            })}
+                                        </p>
+                                    )}
+                                    <button
+                                        type="button"
+                                        onClick={handleLeaveNetwork}
+                                        disabled={
+                                            leaveConfirm.trim().toLowerCase() !== NETWORK_LEAVE_CODE ||
+                                            networkLeaveLoading
+                                        }
+                                        className="mt-3 w-full rounded-full border border-rose-400/50 bg-rose-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-rose-200 disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                        {networkLeaveLoading ? t('actions.saving') : t('network.leave')}
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="rounded-2xl border border-white/10 bg-[#060714] p-4">
+                                <div>
+                                    <p className="text-xs uppercase tracking-[0.2em] text-slate-400">
+                                        {t('network.incomingTitle')}
+                                    </p>
+                                    <div className="mt-3 flex flex-col gap-2">
+                                        {networkState?.incoming.length ? (
+                                            networkState.incoming.map((request) => (
+                                                <div
+                                                    key={request.id}
+                                                    className="flex items-center justify-between rounded-xl border border-white/5 bg-white/5 px-3 py-2"
+                                                >
+                                                    <div>
+                                                        <p className="text-sm font-semibold text-white">
+                                                            {request.sender.username}
+                                                        </p>
+                                                        <p className="text-xs text-slate-400">
+                                                            {t('network.requestDate', {
+                                                                date: formatRequestDate(request.createdAt),
+                                                            })}
+                                                        </p>
+                                                    </div>
+                                                    <div className="flex gap-2">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleAcceptFriendRequest(request.id)}
+                                                            disabled={networkActionRequestId === request.id}
+                                                            className="rounded-full border border-emerald-400/50 bg-emerald-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.15em] text-emerald-200"
+                                                        >
+                                                            {t('actions.accept')}
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleDismissFriendRequest(request.id)}
+                                                            disabled={networkActionRequestId === request.id}
+                                                            className="rounded-full border border-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.15em] text-slate-200"
+                                                        >
+                                                            {t('network.decline')}
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ))
+                                        ) : (
+                                            <p className="text-sm text-slate-400">{t('network.noIncoming')}</p>
+                                        )}
+                                    </div>
+                                </div>
+                                <div className="mt-6">
+                                    <p className="text-xs uppercase tracking-[0.2em] text-slate-400">
+                                        {t('network.outgoingTitle')}
+                                    </p>
+                                    <div className="mt-3 flex flex-col gap-2">
+                                        {networkState?.outgoing.length ? (
+                                            networkState.outgoing.map((request) => (
+                                                <div
+                                                    key={request.id}
+                                                    className="flex items-center justify-between rounded-xl border border-white/5 bg-white/5 px-3 py-2"
+                                                >
+                                                    <div>
+                                                        <p className="text-sm font-semibold text-white">
+                                                            {request.recipient.username}
+                                                        </p>
+                                                        <p className="text-xs text-slate-400">
+                                                            {t('network.requestDate', {
+                                                                date: formatRequestDate(request.createdAt),
+                                                            })}
+                                                        </p>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleDismissFriendRequest(request.id)}
+                                                        disabled={networkActionRequestId === request.id}
+                                                        className="rounded-full border border-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.15em] text-slate-200"
+                                                    >
+                                                        {t('network.cancel')}
+                                                    </button>
+                                                </div>
+                                            ))
+                                        ) : (
+                                            <p className="text-sm text-slate-400">{t('network.noOutgoing')}</p>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="rounded-2xl border border-white/10 bg-[#060714] p-4">
+                                <p className="text-xs uppercase tracking-[0.2em] text-slate-400">
+                                    {t('network.searchTitle')}
+                                </p>
+                                <input
+                                    className="valorant-input mt-3 w-full"
+                                    placeholder={t('network.searchPlaceholder')}
+                                    value={networkSearchQuery}
+                                    onChange={(event) => setNetworkSearchQuery(event.target.value)}
+                                />
+                                {networkSearchLoading ? (
+                                    <p className="mt-3 text-xs text-slate-400">{t('loading.search')}</p>
+                                ) : (
+                                    <div className="mt-3 flex flex-col gap-2">
+                                        {networkSearchQuery.trim().length >= 2 &&
+                                            networkSearchResults.length === 0 && (
+                                                <p className="text-sm text-slate-400">
+                                                    {t('network.searchEmpty')}
+                                                </p>
+                                            )}
+                                        {networkSearchResults.map((candidate) => (
+                                            <div
+                                                key={candidate.id}
+                                                className="flex items-center justify-between rounded-xl border border-white/5 bg-white/5 px-3 py-2"
+                                            >
+                                                <p className="text-sm font-semibold text-white">
+                                                    {candidate.username}
+                                                </p>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleSendFriendRequest(candidate.id)}
+                                                    disabled={networkSendingRequest}
+                                                    className="rounded-full border border-cyan-400/50 bg-cyan-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.15em] text-cyan-200"
+                                                >
+                                                    {networkSendingRequest
+                                                        ? t('network.requesting')
+                                                        : t('network.invite')}
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                                {xpRewards && (
+                                    <p className="mt-4 text-xs text-slate-400">
+                                        {t('network.inviteReward', {
+                                            amount: xpRewards.networkMemberJoin,
+                                        })}
+                                    </p>
+                                )}
+                            </div>
+                        </div>
+                    )}
                 </div>
             </header>
 

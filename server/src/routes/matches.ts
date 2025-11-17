@@ -5,7 +5,7 @@ import {
     TeamPlayer,
     createMatch,
     deleteMatch,
-    getMatchesForUser,
+    getMatchesForNetwork,
     updateMatchWinner,
 } from '../services/matchService';
 import { awardMatchCompletionXp, type XpSummary } from '../services/xpService';
@@ -26,7 +26,7 @@ const validateTeamPlayers = (players: unknown): players is TeamPlayer[] => {
 
 router.get('/', async (req, res) => {
     try {
-        const matches = await getMatchesForUser(req.authUser!.id);
+        const matches = await getMatchesForNetwork(req.authUser!.networkId);
         res.json(matches);
     } catch (error) {
         res.status(500).json({ message: 'Failed to load matches' });
@@ -64,7 +64,7 @@ router.post('/', async (req, res) => {
     };
 
     try {
-        const match = await createMatch(req.authUser!.id, {
+        const match = await createMatch(req.authUser!.networkId, req.authUser!.id, {
             teamA,
             teamB,
             winner,
@@ -76,7 +76,12 @@ router.post('/', async (req, res) => {
         });
         let xp: XpSummary | undefined;
         if (normalizedStatus === 'completed') {
-            xp = await awardMatchCompletionXp(req.authUser!.id, match.id, normalizedFeatures);
+            xp = await awardMatchCompletionXp(
+                req.authUser!.id,
+                req.authUser!.networkId,
+                match.id,
+                normalizedFeatures
+            );
         }
         res.status(201).json({ match, xp });
     } catch (error) {
@@ -98,7 +103,7 @@ router.patch('/:id', async (req, res) => {
 
     try {
         const match = await updateMatchWinner(
-            req.authUser!.id,
+            req.authUser!.networkId,
             matchId,
             normalizedWinner,
             { teamA: scoreA, teamB: scoreB }
@@ -120,7 +125,7 @@ const deleteHandler = async (req: express.Request, res: express.Response) => {
         return;
     }
     try {
-        const deleted = await deleteMatch(req.authUser!.id, matchId);
+        const deleted = await deleteMatch(req.authUser!.networkId, matchId);
         if (!deleted) {
             res.status(404).json({ message: 'Match not found' });
             return;

@@ -49,6 +49,19 @@ const registerSocket = (userId: string, socket: WebSocket) => {
     });
 };
 
+const emitToUser = (userId: string, payload: unknown) => {
+    const sockets = userSockets.get(userId);
+    if (!sockets || sockets.size === 0) {
+        return;
+    }
+    const message = JSON.stringify(payload);
+    sockets.forEach((socket) => {
+        if (socket.readyState === WebSocket.OPEN) {
+            socket.send(message);
+        }
+    });
+};
+
 export const setupRealtimeServer = (server: http.Server) => {
     const wss = new WebSocketServer({ server, path: '/ws' });
     wss.on('connection', (socket, req) => {
@@ -69,14 +82,11 @@ export const setupRealtimeServer = (server: http.Server) => {
 };
 
 export const emitXpUpdate = (userId: string, summary: XpSummary) => {
-    const sockets = userSockets.get(userId);
-    if (!sockets || sockets.size === 0) {
-        return;
-    }
-    const payload = JSON.stringify({ type: 'xp:update', payload: summary });
-    sockets.forEach((socket) => {
-        if (socket.readyState === WebSocket.OPEN) {
-            socket.send(payload);
-        }
-    });
+    emitToUser(userId, { type: 'xp:update', payload: summary });
+};
+
+export const emitSocialUpdate = (targets: string | string[]) => {
+    const list = Array.isArray(targets) ? targets : [targets];
+    const unique = Array.from(new Set(list));
+    unique.forEach((userId) => emitToUser(userId, { type: 'social:update' }));
 };

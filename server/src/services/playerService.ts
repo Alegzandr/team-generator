@@ -3,41 +3,42 @@ import { allQuery, getQuery, runQuery } from '../db';
 export interface PlayerRecord {
     id: number;
     user_id: string;
+    network_id: string;
     name: string;
     skill: number;
 }
 
-export const getPlayersForUser = async (userId: string) => {
+export const getPlayersForNetwork = async (networkId: string) => {
     return allQuery<PlayerRecord>(
         `
-        SELECT id, user_id, name, skill
+        SELECT id, user_id, network_id, name, skill
         FROM players
-        WHERE user_id = ?
+        WHERE network_id = ?
         ORDER BY name COLLATE NOCASE ASC
     `,
-        [userId]
+        [networkId]
     );
 };
 
-export const getPlayersForUserPaginated = async (
-    userId: string,
+export const getPlayersForNetworkPaginated = async (
+    networkId: string,
     limit: number,
     offset: number
 ) => {
     const players = await allQuery<PlayerRecord>(
         `
-        SELECT id, user_id, name, skill
+        SELECT id, user_id, network_id, name, skill
         FROM players
-        WHERE user_id = ?
+        WHERE network_id = ?
         ORDER BY name COLLATE NOCASE ASC
         LIMIT ?
         OFFSET ?
     `,
-        [userId, limit, offset]
+        [networkId, limit, offset]
     );
     const totalRow = await getQuery<{ count: number }>(
-        `SELECT COUNT(*) as count FROM players WHERE user_id = ?`,
-        [userId]
+        `SELECT COUNT(*) as count FROM players WHERE network_id = ?`,
+        [networkId]
     );
     return {
         players,
@@ -46,12 +47,13 @@ export const getPlayersForUserPaginated = async (
 };
 
 export const createPlayer = async (
+    networkId: string,
     userId: string,
     data: { name: string; skill: number }
 ) => {
     const result = await runQuery(
-        `INSERT INTO players (user_id, name, skill) VALUES (?, ?, ?)`,
-        [userId, data.name, data.skill]
+        `INSERT INTO players (user_id, network_id, name, skill) VALUES (?, ?, ?, ?)`,
+        [userId, networkId, data.name, data.skill]
     );
 
     return getQuery<PlayerRecord>('SELECT * FROM players WHERE id = ?', [
@@ -59,25 +61,25 @@ export const createPlayer = async (
     ]);
 };
 
-export const deletePlayer = async (userId: string, playerId: number) => {
-    const result = await runQuery(`DELETE FROM players WHERE id = ? AND user_id = ?`, [
+export const deletePlayer = async (networkId: string, playerId: number) => {
+    const result = await runQuery(`DELETE FROM players WHERE id = ? AND network_id = ?`, [
         playerId,
-        userId,
+        networkId,
     ]);
     return (result.changes ?? 0) > 0;
 };
 
 export const updatePlayer = async (
-    userId: string,
+    networkId: string,
     playerId: number,
     data: { name: string; skill: number }
 ) => {
     await runQuery(
-        `UPDATE players SET name = ?, skill = ? WHERE id = ? AND user_id = ?`,
-        [data.name, data.skill, playerId, userId]
+        `UPDATE players SET name = ?, skill = ? WHERE id = ? AND network_id = ?`,
+        [data.name, data.skill, playerId, networkId]
     );
     return getQuery<PlayerRecord>(
-        `SELECT id, user_id, name, skill FROM players WHERE id = ? AND user_id = ?`,
-        [playerId, userId]
+        `SELECT id, user_id, network_id, name, skill FROM players WHERE id = ? AND network_id = ?`,
+        [playerId, networkId]
     );
 };

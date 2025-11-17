@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { getQuery, runQuery } from '../db';
+import { allQuery, getQuery, runQuery } from '../db';
 import { emitXpUpdate } from './realtimeService';
 
 const XP_VALUES = {
@@ -11,6 +11,8 @@ const XP_VALUES = {
     PLAYER_CREATE: 8,
     PLAYER_REMOVE: -5,
     REFERRAL: 150,
+    NETWORK_MEMBER_JOIN: 45,
+    NETWORK_MEMBER_LEAVE: -45,
 };
 
 const isUniqueConstraintError = (error: unknown) =>
@@ -22,6 +24,14 @@ const loadXpTotal = async (userId: string) => {
         [userId]
     );
     return row?.xp_total ?? 0;
+};
+
+const loadNetworkMemberIds = async (networkId: string) => {
+    const rows = await allQuery<{ id: string }>(
+        `SELECT id FROM users WHERE network_id = ?`,
+        [networkId]
+    );
+    return rows.map((row) => row.id);
 };
 
 interface EventDescriptor {
@@ -108,6 +118,25 @@ const runEvents = async (
     return summary;
 };
 
+const runEventsForNetwork = async (
+    networkId: string,
+    actorId: string,
+    events: EventDescriptor[]
+): Promise<XpSummary> => {
+    const memberIds = await loadNetworkMemberIds(networkId);
+    if (memberIds.length === 0) {
+        return runEvents(actorId, events);
+    }
+    let actorSummary: XpSummary | null = null;
+    for (const memberId of memberIds) {
+        const summary = await runEvents(memberId, events);
+        if (memberId === actorId) {
+            actorSummary = summary;
+        }
+    }
+    return actorSummary ?? (await runEvents(actorId, []));
+};
+
 export const getXpSnapshot = async (userId: string) => {
     const xp = await loadXpTotal(userId);
     return { xp };
@@ -115,6 +144,7 @@ export const getXpSnapshot = async (userId: string) => {
 
 export const awardMatchCompletionXp = async (
     userId: string,
+    networkId: string,
     matchId: number,
     options: { mapSelection?: boolean; momentum?: boolean }
 ) => {
@@ -139,11 +169,15 @@ export const awardMatchCompletionXp = async (
             context: `match:${matchId}:momentum`,
         });
     }
-    return runEvents(userId, events);
+    return runEventsForNetwork(networkId, userId, events);
 };
 
-export const awardPlayerCreationXp = async (userId: string, playerId: number) => {
-    return runEvents(userId, [
+export const awardPlayerCreationXp = async (
+    userId: string,
+    networkId: string,
+    playerId: number
+) => {
+    return runEventsForNetwork(networkId, userId, [
         {
             amount: XP_VALUES.PLAYER_CREATE,
             type: 'player:create',
@@ -154,9 +188,10 @@ export const awardPlayerCreationXp = async (userId: string, playerId: number) =>
 
 export const awardPlayerRemovalPenalty = async (
     userId: string,
+    networkId: string,
     playerId: number
 ) => {
-    return runEvents(userId, [
+    return runEventsForNetwork(networkId, userId, [
         {
             amount: XP_VALUES.PLAYER_REMOVE,
             type: 'player:remove',
@@ -165,8 +200,12 @@ export const awardPlayerRemovalPenalty = async (
     ]);
 };
 
-export const awardTeamShareXp = async (userId: string, signature: string) => {
-    return runEvents(userId, [
+export const awardTeamShareXp = async (
+    userId: string,
+    networkId: string,
+    signature: string
+) => {
+    return runEventsForNetwork(networkId, userId, [
         {
             amount: XP_VALUES.TEAM_SHARE,
             type: 'share:team',
@@ -177,16 +216,17 @@ export const awardTeamShareXp = async (userId: string, signature: string) => {
 
 export const awardMatchScreenshotXp = async (
     userId: string,
+    networkId: string,
     matchId: number
 ) => {
     const match = await getQuery<{ id: number }>(
-        `SELECT id FROM matches WHERE id = ? AND user_id = ?`,
-        [matchId, userId]
+        `SELECT id FROM matches WHERE id = ? AND network_id = ?`,
+        [matchId, networkId]
     );
     if (!match) {
         throw new Error('Match not found');
     }
-    return runEvents(userId, [
+    return runEventsForNetwork(networkId, userId, [
         {
             amount: XP_VALUES.MATCH_SCREENSHOT,
             type: 'screenshot:history',
@@ -230,6 +270,34 @@ export const awardReferralXp = async (
     ]);
 };
 
+export const awardNetworkMemberJoinXp = async (
+    actorId: string,
+    networkId: string,
+    memberId: string
+) => {
+    return runEventsForNetwork(networkId, actorId, [
+        {
+            amount: XP_VALUES.NETWORK_MEMBER_JOIN,
+            type: 'network:member_join',
+            context: `network:${networkId}:join:${memberId}:${Date.now()}`,
+        },
+    ]);
+};
+
+export const awardNetworkMemberLeaveXp = async (
+    actorId: string,
+    networkId: string,
+    memberId: string
+) => {
+    return runEventsForNetwork(networkId, actorId, [
+        {
+            amount: XP_VALUES.NETWORK_MEMBER_LEAVE,
+            type: 'network:member_leave',
+            context: `network:${networkId}:leave:${memberId}:${Date.now()}`,
+        },
+    ]);
+};
+
 export const getXpRewards = () => ({
     matchBase: XP_VALUES.MATCH_BASE,
     matchMapBonus: XP_VALUES.MATCH_MAP_BONUS,
@@ -239,4 +307,6 @@ export const getXpRewards = () => ({
     playerCreate: XP_VALUES.PLAYER_CREATE,
     playerRemove: XP_VALUES.PLAYER_REMOVE,
     referralBonus: XP_VALUES.REFERRAL,
+    networkMemberJoin: XP_VALUES.NETWORK_MEMBER_JOIN,
+    networkMemberLeave: XP_VALUES.NETWORK_MEMBER_LEAVE,
 });

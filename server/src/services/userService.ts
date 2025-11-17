@@ -1,4 +1,8 @@
 import { allQuery, getQuery, runQuery } from '../db';
+import {
+    clearUserFriendRequests,
+    deleteNetworkIfEmpty,
+} from './networkService';
 
 export interface StoredUser {
     id: string;
@@ -6,6 +10,7 @@ export interface StoredUser {
     avatar: string | null;
     token_version: number;
     xp_total?: number;
+    network_id: string;
 }
 
 export interface UserUpsertInput {
@@ -15,16 +20,17 @@ export interface UserUpsertInput {
 }
 
 export const upsertUser = async (user: UserUpsertInput) => {
+    await runQuery(`INSERT OR IGNORE INTO networks (id) VALUES (?)`, [user.id]);
     await runQuery(
         `
-        INSERT INTO users (id, username, avatar)
-        VALUES (?, ?, ?)
+        INSERT INTO users (id, username, avatar, network_id)
+        VALUES (?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             username = excluded.username,
             avatar = excluded.avatar,
             last_active = CURRENT_TIMESTAMP
-    `,
-        [user.id, user.username, user.avatar]
+`,
+        [user.id, user.username, user.avatar, user.id]
     );
 
     const record = await getUserById(user.id);
@@ -36,30 +42,56 @@ export const upsertUser = async (user: UserUpsertInput) => {
 
 export const getUserById = async (id: string) => {
     return getQuery<StoredUser>(
-        'SELECT id, username, avatar, token_version, xp_total FROM users WHERE id = ?',
+        `SELECT id, username, avatar, token_version, xp_total, network_id
+         FROM users WHERE id = ?`,
         [id]
     );
 };
 
 export const deleteUserAndData = async (userId: string) => {
-    await runQuery('DELETE FROM players WHERE user_id = ?', [userId]);
-    await runQuery('DELETE FROM matches WHERE user_id = ?', [userId]);
+    const user = await getQuery<{ network_id: string }>(
+        `SELECT network_id FROM users WHERE id = ?`,
+        [userId]
+    );
+    if (!user) {
+        return;
+    }
+    const networkId = user.network_id;
+    const replacement = await getQuery<{ id: string }>(
+        `SELECT id FROM users WHERE network_id = ? AND id != ? LIMIT 1`,
+        [networkId, userId]
+    );
+    if (replacement) {
+        await runQuery(`UPDATE players SET user_id = ? WHERE user_id = ?`, [
+            replacement.id,
+            userId,
+        ]);
+        await runQuery(`UPDATE matches SET user_id = ? WHERE user_id = ?`, [
+            replacement.id,
+            userId,
+        ]);
+    }
+    await clearUserFriendRequests(userId);
     await runQuery('DELETE FROM users WHERE id = ?', [userId]);
+    await deleteNetworkIfEmpty(networkId);
 };
 
 export const getUsers = async () => {
     return allQuery<StoredUser>(
-        'SELECT id, username, avatar, token_version, xp_total FROM users',
+        'SELECT id, username, avatar, token_version, xp_total, network_id FROM users',
         []
     );
 };
 
 export const deleteInactiveUsers = async (cutoffISO: string) => {
-    const result = await runQuery(
-        `DELETE FROM users WHERE DATETIME(last_active) <= DATETIME(?)`,
+    const rows = await allQuery<{ id: string }>(
+        `SELECT id FROM users WHERE DATETIME(last_active) <= DATETIME(?)`,
         [cutoffISO]
     );
-    return result.changes ?? 0;
+    for (const row of rows) {
+        await deleteUserAndData(row.id);
+    }
+    return rows.length;
 };
 
 export const touchUserActivity = async (userId: string) => {

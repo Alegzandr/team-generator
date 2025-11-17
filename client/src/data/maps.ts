@@ -20,7 +20,7 @@ export const MAP_POOL = {
         "Summoner's Rift",
         'Howling Abyss',
         'Nexus Blitz',
-        'Arena', // covers all Arena “rings” (Ionia, Freljord, Shurima, Noxus, etc.)
+        'Arena', // covers all Arena “rings”
     ],
 
     'Counter-Strike 2': [
@@ -63,7 +63,7 @@ export const MAP_POOL = {
     ],
 
     'Rocket League': [
-        // All 18 Standard “soccar” arenas (no alt/Mutator layouts) :contentReference[oaicite:3]{index=3}
+        // All standard “soccar” arenas (no alt/Mutator layouts) :contentReference[oaicite:3]{index=3}
         'AquaDome',
         'Beckwith Park',
         'Champions Field',
@@ -132,7 +132,7 @@ export const MAP_POOL = {
     ],
 
     'Rainbow Six Siege': [
-        // All 27 maps in the Operation Daybreak era selection (Quick, Ranked, TDM, Unranked, Dual Front) :contentReference[oaicite:5]{index=5}
+        // All maps in the Operation Daybreak-era selection (Quick, Ranked, TDM, Unranked, Dual Front) :contentReference[oaicite:5]{index=5}
         'Clubhouse',
         'Bank',
         'Kafe Dostoyevsky',
@@ -160,6 +160,52 @@ export const MAP_POOL = {
         'Tower',
         'Villa',
         'Yacht',
+    ],
+
+    'Super Smash Bros. Melee': [
+        // All distinct versus-mode stages (starting, unlockable, Battlefield/FD, past) :contentReference[oaicite:6]{index=6}
+        'Battlefield',
+        'Final Destination',
+        'Brinstar',
+        'Corneria',
+        'Venom',
+        'Fountain of Dreams',
+        'Great Bay',
+        'Green Greens',
+        'Temple',
+        'Icicle Mountain',
+        'Jungle Japes',
+        'Kongo Jungle',
+        'Mushroom Kingdom',
+        'Mute City',
+        'Onett',
+        'Pokémon Stadium',
+        "Princess Peach's Castle",
+        'Rainbow Cruise',
+        "Yoshi's Island",
+        "Yoshi's Story",
+        'Brinstar Depths',
+        'Fourside',
+        'Big Blue',
+        'Poké Floats',
+        'Mushroom Kingdom II',
+        'Flat Zone',
+        'Dream Land',
+    ],
+
+    'Super Smash Bros. Ultimate': [
+        // Common competitive / “legal” stages (good for customs without all 100+ chaos) :contentReference[oaicite:7]{index=7}
+        'Battlefield',
+        'Small Battlefield',
+        'Final Destination',
+        'Pokémon Stadium 2',
+        'Smashville',
+        'Town & City',
+        'Kalos Pokémon League',
+        "Yoshi's Story",
+        'Lylat Cruise',
+        'Hollow Bastion',
+        'Northern Cave',
     ],
 } as const;
 

@@ -38,7 +38,11 @@ router.post('/events', async (req, res) => {
             return;
         }
         try {
-            const xp = await awardTeamShareXp(req.authUser!.id, signature);
+            const xp = await awardTeamShareXp(
+                req.authUser!.id,
+                req.authUser!.networkId,
+                signature
+            );
             res.json({ xp });
         } catch (error) {
             res.status(500).json({ message: 'Failed to award XP' });
@@ -53,7 +57,11 @@ router.post('/events', async (req, res) => {
             return;
         }
         try {
-            const xp = await awardMatchScreenshotXp(req.authUser!.id, matchId);
+            const xp = await awardMatchScreenshotXp(
+                req.authUser!.id,
+                req.authUser!.networkId,
+                matchId
+            );
             res.json({ xp });
         } catch (error) {
             if (error instanceof Error && error.message === 'Match not found') {

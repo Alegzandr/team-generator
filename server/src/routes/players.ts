@@ -3,7 +3,7 @@ import { requireAuth } from '../middleware/authMiddleware';
 import {
     createPlayer,
     deletePlayer,
-    getPlayersForUserPaginated,
+    getPlayersForNetworkPaginated,
     updatePlayer,
 } from '../services/playerService';
 import {
@@ -23,8 +23,8 @@ router.get('/', async (req, res) => {
         : 20;
     const offset = Number.isFinite(offsetParam) ? Math.max(offsetParam, 0) : 0;
     try {
-        const result = await getPlayersForUserPaginated(
-            req.authUser!.id,
+        const result = await getPlayersForNetworkPaginated(
+            req.authUser!.networkId,
             limit,
             offset
         );
@@ -49,7 +49,7 @@ router.post('/', async (req, res) => {
     }
 
     try {
-        const player = await createPlayer(req.authUser!.id, {
+        const player = await createPlayer(req.authUser!.networkId, req.authUser!.id, {
             name: name.trim(),
             skill: skillValue,
         });
@@ -57,7 +57,11 @@ router.post('/', async (req, res) => {
             res.status(500).json({ message: 'Failed to load player' });
             return;
         }
-        const xp = await awardPlayerCreationXp(req.authUser!.id, player.id);
+        const xp = await awardPlayerCreationXp(
+            req.authUser!.id,
+            req.authUser!.networkId,
+            player.id
+        );
         res.status(201).json({ player, xp });
     } catch (error) {
         res.status(500).json({ message: 'Failed to create player' });
@@ -72,12 +76,16 @@ router.delete('/:id', async (req, res) => {
     }
 
     try {
-        const deleted = await deletePlayer(req.authUser!.id, playerId);
+        const deleted = await deletePlayer(req.authUser!.networkId, playerId);
         if (!deleted) {
             res.status(404).json({ message: 'Player not found' });
             return;
         }
-        const xp = await awardPlayerRemovalPenalty(req.authUser!.id, playerId);
+        const xp = await awardPlayerRemovalPenalty(
+            req.authUser!.id,
+            req.authUser!.networkId,
+            playerId
+        );
         res.json({ xp });
     } catch (error) {
         res.status(500).json({ message: 'Failed to delete player' });
@@ -105,7 +113,7 @@ router.patch('/:id', async (req, res) => {
     }
 
     try {
-        const player = await updatePlayer(req.authUser!.id, playerId, {
+        const player = await updatePlayer(req.authUser!.networkId, playerId, {
             name: name.trim(),
             skill: skillValue,
         });

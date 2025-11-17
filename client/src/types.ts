@@ -35,6 +35,31 @@ export interface Match {
     status?: 'completed' | 'canceled';
 }
 
+export interface NetworkMember {
+    id: string;
+    username: string;
+    avatar: string | null;
+}
+
+export interface IncomingFriendRequest {
+    id: number;
+    createdAt: string;
+    sender: NetworkMember;
+}
+
+export interface OutgoingFriendRequest {
+    id: number;
+    createdAt: string;
+    recipient: NetworkMember;
+}
+
+export interface NetworkState {
+    networkId: string;
+    members: NetworkMember[];
+    incoming: IncomingFriendRequest[];
+    outgoing: OutgoingFriendRequest[];
+}
+
 export interface MapPreferences {
     banned: Record<string, string[]>;
 }
@@ -77,4 +102,6 @@ export interface XpRewards {
     playerCreate: number;
     playerRemove: number;
     referralBonus: number;
+    networkMemberJoin: number;
+    networkMemberLeave: number;
 }

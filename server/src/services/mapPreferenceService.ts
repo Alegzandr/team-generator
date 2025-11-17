@@ -28,11 +28,11 @@ const normalizePreferences = (data: unknown): MapPreferencesRecord => {
 };
 
 export const getMapPreferences = async (
-    userId: string
+    networkId: string
 ): Promise<MapPreferencesRecord> => {
     const row = await getQuery<{ preferences: string }>(
-        'SELECT preferences FROM map_preferences WHERE user_id = ?',
-        [userId]
+        'SELECT preferences FROM map_preferences WHERE network_id = ?',
+        [networkId]
     );
     if (!row) {
         return DEFAULT_PREFERENCES;
@@ -46,15 +46,15 @@ export const getMapPreferences = async (
 };
 
 export const saveMapPreferences = async (
-    userId: string,
+    networkId: string,
     preferences: Partial<MapPreferencesRecord>
 ) => {
     const normalized = normalizePreferences(preferences);
     await runQuery(
-        `INSERT INTO map_preferences (user_id, preferences)
+        `INSERT INTO map_preferences (network_id, preferences)
         VALUES (?, ?)
-        ON CONFLICT(user_id) DO UPDATE SET preferences = excluded.preferences`,
-        [userId, JSON.stringify(normalized)]
+        ON CONFLICT(network_id) DO UPDATE SET preferences = excluded.preferences`,
+        [networkId, JSON.stringify(normalized)]
     );
     return normalized;
 };
