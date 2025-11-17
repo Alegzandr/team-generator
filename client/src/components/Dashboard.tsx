@@ -446,6 +446,10 @@ const Dashboard = () => {
             }),
         [matches, activeMomentumGame, momentumResetAfter]
     );
+    const hasMomentum = useMemo(
+        () => Object.values(momentumMap).some((value) => Math.abs(value) > 0.01),
+        [momentumMap]
+    );
     const mapOptions = useMemo<string[]>(
         () => [...(MAP_POOL[selectedGame] ?? [])],
         [selectedGame]
@@ -1487,7 +1491,8 @@ const Dashboard = () => {
         setMomentumResetAfter(timestamp);
         momentumMapRef.current = {};
         setMomentumHighlights(new Set());
-    }, []);
+        pushToast(t('players.momentumResetToast'), 'info');
+    }, [pushToast, t]);
 
     useEffect(() => {
         if (typeof window === 'undefined') return;
@@ -2469,20 +2474,6 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                                                             <button
                                                                 type="button"
                                                                 onClick={() =>
-                                                                    markNotificationRead(
-                                                                        notification.id,
-                                                                        !notification.isRead
-                                                                    )
-                                                                }
-                                                                className="rounded-full border border-white/20 px-3 py-1 text-white hover:border-cyan-400/60"
-                                                            >
-                                                                {notification.isRead
-                                                                    ? t('notifications.markUnread')
-                                                                    : t('notifications.markRead')}
-                                                            </button>
-                                                            <button
-                                                                type="button"
-                                                                onClick={() =>
                                                                     removeNotification(notification.id)
                                                                 }
                                                                 className="rounded-full border border-white/20 px-3 py-1 text-white hover:border-rose-400/60"
@@ -3303,6 +3294,7 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                             <button
                                 type="button"
                                 onClick={handleResetMomentum}
+                                disabled={!hasMomentum}
                                 className="valorant-btn-outline px-4 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
                             >
                                 {t('players.momentumReset')}

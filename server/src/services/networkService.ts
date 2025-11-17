@@ -224,7 +224,14 @@ export const getNetworkState = async (networkId: string, userId: string): Promis
             [userId]
         ),
     ]);
-    const members = await toSummaryWithBadges(networkId, memberRows);
+    const members = await toSummaryWithBadges(
+        networkId,
+        memberRows.sort((a, b) => {
+            const aTime = a.network_joined_at ? Date.parse(a.network_joined_at) : 0;
+            const bTime = b.network_joined_at ? Date.parse(b.network_joined_at) : 0;
+            return aTime - bTime;
+        })
+    );
 
     return {
         networkId,

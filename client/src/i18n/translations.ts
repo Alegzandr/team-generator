@@ -50,6 +50,7 @@ export const translations = {
         'players.momentumResetDescriptionFiltered':
             'Momentum uses recent {game} matches. Reset it to clear current boosts.',
         'players.momentumReset': 'Reset momentum',
+        'players.momentumResetToast': 'Momentum reset. New matches will rebuild it.',
         'players.removeConfirmation': 'Remove this player?',
         'players.duplicate': 'That player already exists in your group.',
         'teams.title': 'Team builder',
@@ -271,6 +272,7 @@ export const translations = {
         'players.momentumResetDescriptionFiltered':
             'Le momentum utilise les matchs récents de {game}. Réinitialise-le pour repartir à zéro.',
         'players.momentumReset': 'Reset momentum',
+        'players.momentumResetToast': 'Momentum réinitialisé. Les prochains matchs le recalculeront.',
         'players.removeConfirmation': 'Supprimer ce joueur ?',
         'players.duplicate': 'Ce joueur existe déjà dans le groupe.',
         'teams.title': 'Créateur d’équipes',
