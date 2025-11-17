@@ -5,11 +5,12 @@
 ## Feature Snapshot
 
 -   **Discord OAuth login** – we only store your Discord ID, username, and avatar; an HttpOnly cookie carries the seven-day JWT so scripts can’t steal it.
--   **Saved & temporary rosters** – permanent players live in SQLite; temporary ones stay local to the browser. Both lists support inline edits, drag-and-drop reordering, and “select all / clear all” toggles, plus 0‑10 skill ratings that better reflect a player’s range.
+-   **Saved & temporary rosters** – permanent players live in SQLite; temporary ones stay local to the browser. Both lists support inline edits, drag-and-drop reordering, “select all / clear all”, infinite scrolling, and 0‑10 skill ratings. Pagination (20 players/batch) keeps massive rosters smooth.
 -   **Momentum-aware balancing** – recent matches (last 4h) nudge a player’s effective skill up/down, helping the algorithm keep squads fresh. Fresh sessions start with zero momentum, and the boost can be toggled off or scoped per game.
--   **Game-aware map picker** – optionally pick or roll a map for each match (Valorant, CS2, Rocket League, LoL, Overwatch 2, Siege). Users can ban maps per game, and history stores the chosen game/map for future reference.
--   **Drag-first team builder** – generate proposed teams, then drag players directly between columns (even to swap with a full roster). A fairness warning appears if skills drift too far apart.
--   **Match scoring history** – saving a match records both team rosters and scores. Any entry can be edited or deleted, and the same modal is used to capture results everywhere.
+-   **Game-aware map picker** – optionally pick or roll a map for each match (Valorant, CS2, Rocket League, LoL, Overwatch 2, Siege). Users can ban maps per game, screenshot overlays capture the choice, and history stores the selected game/map/status for future reference.
+-   **Drag-first team builder** – generate proposed teams, then drag players directly between columns (even to swap with a full roster). A fairness warning appears if skills drift too far apart, and post-screenshot locks make it clear when you must record or abandon the match.
+-   **Clipboard-ready screenshots** – share the current teams or any match in history via a single camera button. The UI hides helper text automatically and falls back to downloading if the clipboard API is unavailable.
+-   **Match scoring history** – saving or abandoning a match records rosters, map, and status (completed/canceled). Any entry can be edited, deleted, or copied as an image; canceled rows remain visible for audit trails.
 -   **Localization + GDPR** – English/French toggle, cookie consent banner, “delete everything” endpoint, and automatic inactive-user pruning keep the app compliant.
 -   **Docker-ready** – one `docker compose up` brings up the API, client bundle, and reverse proxy.
 
@@ -17,7 +18,7 @@
 
 -   **Frontend**: React 19 + Vite + TypeScript, Tailwind CSS v4, custom contexts (Auth, Language, Toast).
 -   **Backend**: Node 20, Express, Passport (Discord), JWT, SQLite (`sqlite3`), cookie-based session for OAuth handshake.
--   **Infra**: Docker, Docker Compose, Nginx (serves static client + proxies `/api` to the server).
+-   **Infra**: Docker, Docker Compose, Nginx (serves static client + proxies `/api` to the server) plus a friendly `robots.txt` that keeps `/api` out of search results.
 
 ## Local Development
 
@@ -112,7 +113,7 @@ docker compose up --build
 | GET                   | `/api/auth/discord/callback` | Finalize OAuth, issue JWT                                    |
 | GET                   | `/api/user`                  | Current user (requires JWT)                                  |
 | DELETE                | `/api/user`                  | Remove user + saved data (GDPR)                              |
-| GET/POST/PATCH/DELETE | `/api/players`               | CRUD for saved players                                       |
+| GET/POST/PATCH/DELETE | `/api/players`               | CRUD for saved players (`GET` accepts `limit`/`offset`, defaults 20, returns `{ players, total }`) |
 | GET/POST/PATCH/DELETE | `/api/matches`               | List, store, update, delete match results (scores + rosters + map info) |
 | GET/PUT               | `/api/maps/preferences`      | Fetch or persist per-game banned maps for the picker |
 

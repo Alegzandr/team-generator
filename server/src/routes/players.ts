@@ -3,7 +3,7 @@ import { requireAuth } from '../middleware/authMiddleware';
 import {
     createPlayer,
     deletePlayer,
-    getPlayersForUser,
+    getPlayersForUserPaginated,
     updatePlayer,
 } from '../services/playerService';
 
@@ -12,9 +12,19 @@ const router = express.Router();
 router.use(requireAuth);
 
 router.get('/', async (req, res) => {
+    const limitParam = Number(req.query.limit);
+    const offsetParam = Number(req.query.offset);
+    const limit = Number.isFinite(limitParam)
+        ? Math.min(Math.max(limitParam, 1), 100)
+        : 20;
+    const offset = Number.isFinite(offsetParam) ? Math.max(offsetParam, 0) : 0;
     try {
-        const players = await getPlayersForUser(req.authUser!.id);
-        res.json(players);
+        const result = await getPlayersForUserPaginated(
+            req.authUser!.id,
+            limit,
+            offset
+        );
+        res.json(result);
     } catch (error) {
         res.status(500).json({ message: 'Failed to load players' });
     }

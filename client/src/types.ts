@@ -32,6 +32,7 @@ export interface Match {
     created_at: string;
     game?: string | null;
     map?: string | null;
+    status?: 'completed' | 'canceled';
 }
 
 export interface MapPreferences {

@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+
+# Prevent build artifacts or private endpoints if needed
+Disallow: /api/

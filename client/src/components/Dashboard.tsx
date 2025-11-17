@@ -1,4 +1,5 @@
-import { DragEvent, FormEvent, useEffect, useMemo, useState } from 'react';
+import { DragEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { toPng } from 'html-to-image';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { useToast } from '../context/ToastContext';
@@ -22,6 +23,8 @@ const MOMENTUM_STEP = 0.5;
 const FAIRNESS_THRESHOLD = 3;
 const DEFAULT_TEAM_NAMES = { teamA: 'Attackers', teamB: 'Defenders' };
 const DRAG_DATA_FORMAT = 'application/x-team-generator';
+const DASHBOARD_SETTINGS_KEY = 'team-generator:dashboard-settings';
+const PLAYERS_PAGE_SIZE = 20;
 const createDefaultMapPreferences = (): MapPreferences => ({ banned: {} });
 
 type DragPayload =
@@ -146,14 +149,30 @@ const Dashboard = () => {
     const { t, language, setLanguage } = useLanguage();
     const { pushToast } = useToast();
 
+    const storedSettings = useMemo(() => loadDashboardSettings(), []);
+
     const [players, setPlayers] = useState<Player[]>([]);
     const [playersLoading, setPlayersLoading] = useState(false);
+    const [playersLoadingMore, setPlayersLoadingMore] = useState(false);
+    const [playersHasMore, setPlayersHasMore] = useState(true);
     const [matches, setMatches] = useState<Match[]>([]);
     const [matchesLoading, setMatchesLoading] = useState(false);
-    const [momentumEnabled, setMomentumEnabled] = useState(true);
-    const [mapSelectionEnabled, setMapSelectionEnabled] = useState(false);
-    const [selectedGame, setSelectedGame] = useState<GameTitle>(DEFAULT_GAME);
-    const [selectedMap, setSelectedMap] = useState<string | null>(null);
+    const [momentumEnabled, setMomentumEnabled] = useState(
+        storedSettings.momentumEnabled !== false
+    );
+    const [mapSelectionEnabled, setMapSelectionEnabled] = useState(
+        Boolean(storedSettings.mapSelectionEnabled)
+    );
+    const [selectedGame, setSelectedGame] = useState<GameTitle>(() => {
+        const storedGame = storedSettings.selectedGame;
+        if (storedGame && (GAME_TITLES as readonly string[]).includes(storedGame)) {
+            return storedGame;
+        }
+        return DEFAULT_GAME;
+    });
+    const [selectedMap, setSelectedMap] = useState<string | null>(
+        typeof storedSettings.selectedMap === 'string' ? storedSettings.selectedMap : null
+    );
     const [mapPreferences, setMapPreferences] = useState<MapPreferences>(createDefaultMapPreferences());
     const [mapPreferencesLoading, setMapPreferencesLoading] = useState(false);
     const [mapPreferencesSaving, setMapPreferencesSaving] = useState(false);
@@ -166,8 +185,36 @@ const Dashboard = () => {
     const [playerSkill, setPlayerSkill] = useState(5);
     const [tempName, setTempName] = useState('');
     const [tempSkill, setTempSkill] = useState(5);
-    const [playersPerTeam, setPlayersPerTeam] = useState(5);
-    const [teamNames, setTeamNames] = useState(DEFAULT_TEAM_NAMES);
+    const sanitizeTeamNames = () => {
+        const stored = storedSettings.teamNames;
+        if (!stored) return DEFAULT_TEAM_NAMES;
+        return {
+            teamA: stored.teamA?.trim() || DEFAULT_TEAM_NAMES.teamA,
+            teamB: stored.teamB?.trim() || DEFAULT_TEAM_NAMES.teamB,
+        };
+    };
+
+    const sanitizePlayersPerTeam = (value?: number) => {
+        if (typeof value === 'number' && Number.isFinite(value) && value >= 1) {
+            return Math.round(value);
+        }
+        return 5;
+    };
+
+    const [playersPerTeam, setPlayersPerTeam] = useState(
+        sanitizePlayersPerTeam(storedSettings.playersPerTeam)
+    );
+    const [teamNames, setTeamNames] = useState(sanitizeTeamNames);
+    const [copyingTeams, setCopyingTeams] = useState(false);
+    const [teamsLocked, setTeamsLocked] = useState(false);
+
+    const playersListRef = useRef<HTMLDivElement>(null);
+    const playersLengthRef = useRef(0);
+    const playersHasMoreRef = useRef(true);
+    const teamsSnapshotRef = useRef<HTMLDivElement>(null);
+    const matchCardRefs = useRef<Record<number, HTMLDivElement | null>>({});
+    const [copyingMatchIds, setCopyingMatchIds] = useState<Set<number>>(new Set());
+    const copyingTeamsRef = useRef(false);
     const [teams, setTeams] = useState<TeamAssignment>({ teamA: [], teamB: [] });
     const [editingPlayerId, setEditingPlayerId] = useState<number | null>(null);
     const [editingName, setEditingName] = useState('');
@@ -245,35 +292,35 @@ const Dashboard = () => {
         : 0;
     const fairnessWarning = teamsReady && fairnessDiff > FAIRNESS_THRESHOLD;
 
-    const apiRequest = async <T,>(
-        path: string,
-        options: RequestInit = {}
-    ): Promise<T> => {
-        const response = await fetch(`${API_URL}${path}`, {
-            ...options,
-            headers: {
-                'Content-Type': 'application/json',
-                ...(options.headers || {}),
-            },
-            credentials: 'include',
-        });
+    const apiRequest = useCallback(
+        async <T,>(path: string, options: RequestInit = {}): Promise<T> => {
+            const response = await fetch(`${API_URL}${path}`, {
+                ...options,
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(options.headers || {}),
+                },
+                credentials: 'include',
+            });
 
-        if (response.status === 401) {
-            await logout({ silent: true });
-            throw new Error('Unauthorized');
-        }
+            if (response.status === 401) {
+                await logout({ silent: true });
+                throw new Error('Unauthorized');
+            }
 
-        if (!response.ok) {
-            const message = await response.text();
-            throw new ApiError(message || 'Request failed', response.status);
-        }
+            if (!response.ok) {
+                const message = await response.text();
+                throw new ApiError(message || 'Request failed', response.status);
+            }
 
-        if (response.status === 204) {
-            return null as T;
-        }
+            if (response.status === 204) {
+                return null as T;
+            }
 
-        return (await response.json()) as T;
-    };
+            return (await response.json()) as T;
+        },
+        [logout]
+    );
 
     const ensureMatchReady = () => {
         if (!teamsReady) {
@@ -332,6 +379,10 @@ const Dashboard = () => {
     };
 
     const handleRandomizeMap = () => {
+        if (teamsLocked) {
+            notifyTeamsLocked();
+            return;
+        }
         if (!mapSelectionEnabled) {
             setMapSelectionEnabled(true);
         }
@@ -344,6 +395,10 @@ const Dashboard = () => {
     };
 
     const toggleMapSelection = () => {
+        if (teamsLocked) {
+            notifyTeamsLocked();
+            return;
+        }
         if (mapSelectionEnabled) {
             setMapSelectionEnabled(false);
             setSelectedMap(null);
@@ -357,7 +412,39 @@ const Dashboard = () => {
         setMapSelectionEnabled(true);
     };
 
+    const copyTeamsImage = async () => {
+        if (copyingTeamsRef.current) {
+            return;
+        }
+        if (!teamsSnapshotRef.current) {
+            pushToast(t('feedback.error'), 'error');
+            return;
+        }
+        copyingTeamsRef.current = true;
+        setCopyingTeams(true);
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        try {
+            const result = await copyElementToClipboard(teamsSnapshotRef.current);
+            if (result === 'copied') {
+                pushToast(t('feedback.teamsCopied'), 'success');
+            } else {
+                pushToast(t('feedback.teamsDownloaded'), 'info');
+            }
+            setTeamsLocked(true);
+        } catch (error) {
+            console.error('Failed to copy teams image', error);
+            pushToast(t('feedback.error'), 'error');
+        } finally {
+            setCopyingTeams(false);
+            copyingTeamsRef.current = false;
+        }
+    };
+
     const handleToggleMapBan = async (game: GameTitle, mapName: string) => {
+        if (teamsLocked) {
+            notifyTeamsLocked();
+            return;
+        }
         const previousPreferences = mapPreferences;
         const bannedSet = new Set(previousPreferences.banned[game] ?? []);
         if (bannedSet.has(mapName)) {
@@ -389,6 +476,10 @@ const Dashboard = () => {
     };
 
     const handleGameChange = (value: GameTitle) => {
+        if (teamsLocked) {
+            notifyTeamsLocked();
+            return;
+        }
         setSelectedGame(value);
         const allowed = allowedMapsForGame(value);
         if (!mapSelectionEnabled) {
@@ -405,27 +496,58 @@ const Dashboard = () => {
         setSelectedMap(next);
     };
 
+    const fetchPlayers = useCallback(
+        async (reset = false) => {
+            if (!user) return;
+            const limit = PLAYERS_PAGE_SIZE;
+            const offset = reset ? 0 : playersLengthRef.current;
+            if (!reset && !playersHasMoreRef.current) return;
+            if (reset) {
+                setPlayersLoading(true);
+                setPlayersHasMore(true);
+                playersHasMoreRef.current = true;
+                playersLengthRef.current = 0;
+                setPlayers([]);
+            } else {
+                setPlayersLoadingMore(true);
+            }
+            try {
+                const data = await apiRequest<PlayersResponse>(
+                    `/api/players?limit=${limit}&offset=${offset}`
+                );
+                setPlayers((prev) => {
+                    const next = reset ? data.players : [...prev, ...data.players];
+                    playersLengthRef.current = next.length;
+                    return next;
+                });
+                const hasMore = offset + data.players.length < data.total;
+                setPlayersHasMore(hasMore);
+                playersHasMoreRef.current = hasMore;
+            } catch {
+                pushToast(t('feedback.error'), 'error');
+            } finally {
+                if (reset) {
+                    setPlayersLoading(false);
+                } else {
+                    setPlayersLoadingMore(false);
+                }
+            }
+        },
+        [user, apiRequest, pushToast, t]
+    );
+
     useEffect(() => {
         if (!user) {
             setPlayers([]);
             setMatches([]);
+            setPlayersHasMore(true);
+            playersHasMoreRef.current = true;
+            playersLengthRef.current = 0;
             setMapPreferences(createDefaultMapPreferences());
             setMapSelectionEnabled(false);
             setSelectedMap(null);
             return;
         }
-
-        const loadPlayers = async () => {
-            setPlayersLoading(true);
-            try {
-                const data = await apiRequest<Player[]>('/api/players');
-                setPlayers(data);
-            } catch (error) {
-                pushToast(t('feedback.error'), 'error');
-            } finally {
-                setPlayersLoading(false);
-            }
-        };
 
         const loadMatches = async () => {
             setMatchesLoading(true);
@@ -451,10 +573,10 @@ const Dashboard = () => {
             }
         };
 
-        loadPlayers();
+        fetchPlayers(true);
         loadMatches();
         loadMapPreferences();
-    }, [user, t, pushToast]);
+    }, [user, t, pushToast, fetchPlayers]);
 
     useEffect(() => {
         setSelectedPlayerIds((prev) => {
@@ -469,6 +591,57 @@ const Dashboard = () => {
     }, [players]);
 
     useEffect(() => {
+        playersLengthRef.current = players.length;
+    }, [players.length]);
+
+    useEffect(() => {
+        playersHasMoreRef.current = playersHasMore;
+    }, [playersHasMore]);
+
+    const registerMatchCardRef = useCallback((matchId: number, element: HTMLDivElement | null) => {
+        if (element) {
+            matchCardRefs.current[matchId] = element;
+        } else {
+            delete matchCardRefs.current[matchId];
+        }
+    }, []);
+
+    useEffect(() => {
+        const container = playersListRef.current;
+        if (!container) return;
+        const handleScroll = () => {
+            if (playersLoading || playersLoadingMore) return;
+            if (!playersHasMoreRef.current) return;
+            if (
+                container.scrollTop + container.clientHeight >=
+                container.scrollHeight - 40
+            ) {
+                fetchPlayers(false);
+            }
+        };
+        container.addEventListener('scroll', handleScroll);
+        return () => container.removeEventListener('scroll', handleScroll);
+    }, [fetchPlayers, playersLoading, playersLoadingMore]);
+
+    useEffect(() => {
+        persistDashboardSettings({
+            teamNames,
+            playersPerTeam,
+            mapSelectionEnabled,
+            selectedGame,
+            selectedMap,
+            momentumEnabled,
+        });
+    }, [
+        teamNames,
+        playersPerTeam,
+        mapSelectionEnabled,
+        selectedGame,
+        selectedMap,
+        momentumEnabled,
+    ]);
+
+    useEffect(() => {
         if (!mapSelectionEnabled) {
             setSelectedMap(null);
         }
@@ -477,10 +650,13 @@ const Dashboard = () => {
     useEffect(() => {
         if (!mapSelectionEnabled || !selectedMap) return;
         const bannedForGame = mapPreferences.banned[selectedGame] ?? [];
-        if (bannedForGame.includes(selectedMap)) {
+        if (
+            bannedForGame.includes(selectedMap) ||
+            !mapOptions.includes(selectedMap)
+        ) {
             setSelectedMap(null);
         }
-    }, [mapSelectionEnabled, mapPreferences, selectedMap, selectedGame]);
+    }, [mapSelectionEnabled, mapPreferences, selectedMap, selectedGame, mapOptions]);
 
     const togglePlayerSelection = (playerId: number) => {
         setSelectedPlayerIds((prev) => {
@@ -733,7 +909,36 @@ const Dashboard = () => {
     };
 
 
+const notifyTeamsLocked = () => pushToast(t('teams.locked'), 'info');
+
+const copyElementToClipboard = async (element: HTMLElement) => {
+    const dataUrl = await toPng(element, {
+        cacheBust: true,
+        pixelRatio: window.devicePixelRatio || 2,
+        backgroundColor: '#05060f',
+    });
+    const blob = await (await fetch(dataUrl)).blob();
+    if (
+        navigator.clipboard &&
+        'write' in navigator.clipboard &&
+        typeof ClipboardItem !== 'undefined'
+    ) {
+        const item = new ClipboardItem({ 'image/png': blob });
+        await navigator.clipboard.write([item]);
+        return 'copied' as const;
+    }
+    const link = document.createElement('a');
+    link.href = dataUrl;
+    link.download = 'teams.png';
+    link.click();
+    return 'downloaded' as const;
+};
+
     const regenerateTeams = () => {
+        if (teamsLocked) {
+            notifyTeamsLocked();
+            return;
+        }
         const assignment = balanceTeams(selectedPlayers, playersPerTeam);
         setTeams(assignment);
     };
@@ -752,6 +957,10 @@ const Dashboard = () => {
     };
 
     const handleRerollTeams = () => {
+        if (teamsLocked) {
+            notifyTeamsLocked();
+            return;
+        }
         if (!teamsReady) {
             pushToast(
                 t('teams.notEnoughPlayers', {
@@ -769,6 +978,10 @@ const Dashboard = () => {
         from: 'teamA' | 'teamB',
         to: 'teamA' | 'teamB'
     ) => {
+        if (teamsLocked) {
+            notifyTeamsLocked();
+            return;
+        }
         setTeams((prev) => {
             if (from === to) return prev;
             const sourceTeam = from === 'teamA' ? prev.teamA : prev.teamB;
@@ -793,6 +1006,11 @@ const Dashboard = () => {
         player: TeamPlayer,
         from: 'teamA' | 'teamB'
     ) => {
+        if (teamsLocked) {
+            event.preventDefault();
+            notifyTeamsLocked();
+            return;
+        }
         beginDrag(event, { type: 'team', from, player });
     };
 
@@ -801,6 +1019,11 @@ const Dashboard = () => {
         target: 'teamA' | 'teamB',
         targetPlayer?: TeamPlayer
     ) => {
+        if (teamsLocked) {
+            event.preventDefault();
+            notifyTeamsLocked();
+            return;
+        }
         event.preventDefault();
         event.stopPropagation();
         const payload = readDragPayload(event);
@@ -867,11 +1090,10 @@ const Dashboard = () => {
         });
     };
 
-    const handleSaveMatch = async (scores: { teamA: number; teamB: number }) => {
-        if (!ensureMatchReady()) {
-            return;
-        }
-
+    const persistMatch = async (
+        status: 'completed' | 'canceled',
+        scores: { teamA: number; teamB: number }
+    ) => {
         try {
             const match = await apiRequest<Match>('/api/matches', {
                 method: 'POST',
@@ -882,13 +1104,62 @@ const Dashboard = () => {
                     teamB_score: scores.teamB,
                     game: mapSelectionEnabled ? selectedGame : null,
                     map: mapSelectionEnabled ? selectedMap : null,
+                    status,
                 }),
             });
             setMatches((prev) => [match, ...prev]);
-            pushToast(t('feedback.saved'), 'success');
+            setTeamsLocked(false);
+            pushToast(
+                status === 'canceled' ? t('feedback.canceled') : t('feedback.saved'),
+                status === 'canceled' ? 'info' : 'success'
+            );
         } catch (error) {
             pushToast(t('feedback.error'), 'error');
         }
+    };
+
+    const handleSaveMatch = async (scores: { teamA: number; teamB: number }) => {
+        if (!ensureMatchReady()) {
+            return;
+        }
+        await persistMatch('completed', scores);
+    };
+
+    const copyMatchImage = async (matchId: number) => {
+        const node = matchCardRefs.current[matchId];
+        if (!node) {
+            pushToast(t('feedback.error'), 'error');
+            return;
+        }
+        setCopyingMatchIds((prev) => new Set(prev).add(matchId));
+        try {
+            const result = await copyElementToClipboard(node);
+            if (result === 'copied') {
+                pushToast(t('feedback.matchCopied'), 'success');
+            } else {
+                pushToast(t('feedback.matchDownloaded'), 'info');
+            }
+        } catch (error) {
+            console.error('Failed to copy match image', error);
+            pushToast(t('feedback.error'), 'error');
+        } finally {
+            setCopyingMatchIds((prev) => {
+                const next = new Set(prev);
+                next.delete(matchId);
+                return next;
+            });
+        }
+    };
+
+    const handleCancelMatch = async () => {
+        if (!teamsLocked) {
+            notifyTeamsLocked();
+            return;
+        }
+        if (!window.confirm(t('matches.cancelConfirm'))) {
+            return;
+        }
+        await persistMatch('canceled', { teamA: 0, teamB: 0 });
     };
 
     const handleUpdateMatch = async (
@@ -1009,9 +1280,11 @@ const Dashboard = () => {
                         </p>
                     </div>
                 </div>
-                <p className="mt-2 text-xs tracking-[0.12em] text-slate-200">
-                    {t('teams.manualMove')}
-                </p>
+                {!(teamsLocked || copyingTeams) && (
+                    <p className="mt-2 text-xs tracking-[0.12em] text-slate-200">
+                        {t('teams.manualMove')}
+                    </p>
+                )}
                 <div className="mt-3 flex flex-col gap-2">
                     {teams[teamKey].map((player) => (
                         <button
@@ -1130,7 +1403,8 @@ const Dashboard = () => {
                     </form>
 
                     <div
-                        className="max-h-64 space-y-2 overflow-auto pr-2"
+                        ref={playersListRef}
+                        className="max-h-[32rem] space-y-2 overflow-auto pr-2"
                         onDragOver={(e) => e.preventDefault()}
                         onDrop={(e) => handleSavedDrop(e)}
                     >
@@ -1241,6 +1515,19 @@ const Dashboard = () => {
                                 </div>
                             );
                         })}
+                        {playersLoadingMore && (
+                            <p className="py-2 text-center text-xs text-slate-300">
+                                {t('loading.players')}
+                            </p>
+                        )}
+                        {!playersLoading &&
+                            !playersLoadingMore &&
+                            !playersHasMore &&
+                            players.length > 0 && (
+                                <p className="py-2 text-center text-[0.65rem] uppercase tracking-[0.2em] text-slate-500">
+                                    {t('players.allLoaded')}
+                                </p>
+                            )}
                     </div>
 
                     <div>
@@ -1408,7 +1695,8 @@ const Dashboard = () => {
                                     setPlayersPerTeam(value);
                                     setTeams({ teamA: [], teamB: [] });
                                 }}
-                                className="valorant-input mt-1 w-full"
+                                disabled={teamsLocked}
+                                className="valorant-input mt-1 w-full disabled:cursor-not-allowed disabled:opacity-60"
                             />
                             <p className="text-xs text-slate-200">
                                 {t('teams.playersPerTeamHelp')}
@@ -1429,7 +1717,8 @@ const Dashboard = () => {
                                                 [teamKey]: e.target.value,
                                             }))
                                         }
-                                        className="valorant-input mt-1 w-full"
+                                        disabled={teamsLocked}
+                                        className="valorant-input mt-1 w-full disabled:cursor-not-allowed disabled:opacity-60"
                                     />
                                 </div>
                             ))}
@@ -1454,30 +1743,56 @@ const Dashboard = () => {
                     <div className="flex flex-wrap gap-3">
                         <button
                             onClick={handleGenerateTeams}
-                            disabled={!canGenerateTeams}
+                            disabled={!canGenerateTeams || teamsLocked}
                             className="valorant-btn-primary px-6 py-3 text-xs disabled:cursor-not-allowed disabled:opacity-60"
                         >
                             {t('actions.generateTeams')}
                         </button>
                         <button
                             onClick={handleRerollTeams}
-                            disabled={!teamsReady}
+                            disabled={!teamsReady || teamsLocked}
                             className="valorant-btn-outline px-6 py-3 text-xs disabled:cursor-not-allowed disabled:opacity-60"
                         >
                             {t('actions.reroll')}
                         </button>
+                        <button
+                            type="button"
+                            aria-label={t('actions.copyTeamsImage')}
+                            title={t('actions.copyTeamsImage')}
+                            onClick={copyTeamsImage}
+                            disabled={!teamsReady}
+                            className="rounded-full border border-white/15 bg-white/5 px-3 py-2 text-lg text-white transition hover:border-white/40 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                            <span aria-hidden="true">📸</span>
+                            <span className="sr-only">{t('actions.copyTeamsImage')}</span>
+                        </button>
+                    </div>
+                    <div ref={teamsSnapshotRef}>
+                        {mapSelectionEnabled && !mapUnavailable && selectedMap && (
+                            <div className="mb-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-xs text-slate-100">
+                                {t('maps.currentSelection', {
+                                    game: selectedGame,
+                                    map: selectedMap,
+                                })}
+                            </div>
+                        )}
+                        <div className="grid gap-4 md:grid-cols-2">
+                            {renderTeamCard('teamA')}
+                            {renderTeamCard('teamB')}
+                        </div>
+
+                        {fairnessWarning && (
+                            <div className="mt-4 rounded-2xl border border-[#ff4655]/40 bg-[#ff4655]/10 p-4 text-sm text-white">
+                                {t('teams.fairnessWarning', {
+                                    diff: fairnessDiff.toFixed(1),
+                                })}
+                            </div>
+                        )}
                     </div>
 
-                    <div className="grid gap-4 md:grid-cols-2">
-                        {renderTeamCard('teamA')}
-                        {renderTeamCard('teamB')}
-                    </div>
-
-                    {fairnessWarning && (
-                        <div className="rounded-2xl border border-[#ff4655]/40 bg-[#ff4655]/10 p-4 text-sm text-white">
-                            {t('teams.fairnessWarning', {
-                                diff: fairnessDiff.toFixed(1),
-                            })}
+                    {teamsLocked && (
+                        <div className="rounded-2xl border border-white/10 bg-[#ff4655]/15 p-4 text-xs text-white">
+                            {t('teams.lockedNotice')}
                         </div>
                     )}
 
@@ -1497,12 +1812,19 @@ const Dashboard = () => {
                             </div>
                             <button
                                 type="button"
-                                onClick={() => setMomentumEnabled((prev) => !prev)}
+                                disabled={teamsLocked}
+                                onClick={() => {
+                                    if (teamsLocked) {
+                                        notifyTeamsLocked();
+                                        return;
+                                    }
+                                    setMomentumEnabled((prev) => !prev);
+                                }}
                                 className={`rounded-full border px-4 py-2 text-xs font-semibold tracking-[0.12em] transition ${
                                     momentumEnabled
                                         ? 'border-[#ff5c8a]/40 bg-[#ff5c8a]/20 text-white shadow-[0_4px_16px_rgba(255,92,138,0.25)]'
                                         : 'border-white/15 bg-white/5 text-slate-200 hover:border-white/40 hover:text-white'
-                                }`}
+                                } disabled:cursor-not-allowed disabled:opacity-60`}
                             >
                                 {momentumEnabled
                                     ? t('players.momentumDisable')
@@ -1524,23 +1846,29 @@ const Dashboard = () => {
                             <button
                                 type="button"
                                 onClick={toggleMapSelection}
-                                className="valorant-btn-outline px-4 py-2 text-xs"
+                                disabled={teamsLocked || copyingTeams}
+                                className="valorant-btn-outline px-4 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
                             >
                                 {mapSelectionEnabled ? t('maps.disable') : t('maps.enable')}
                             </button>
                         </div>
-                        {mapSelectionEnabled ? (
+                        {mapSelectionEnabled && copyingTeams ? (
+                            <p className="mt-3 text-sm text-slate-200">
+                                {t('maps.hiddenWhileSharing')}
+                            </p>
+                        ) : mapSelectionEnabled ? (
                             <div className="mt-4 space-y-3">
                                 <div>
                                     <label className="text-xs tracking-[0.12em] text-slate-200">
                                         {t('maps.gameLabel')}
                                     </label>
                                     <select
-                                        className="valorant-input mt-1 w-full"
+                                        className="valorant-input mt-1 w-full disabled:cursor-not-allowed disabled:opacity-60"
                                         value={selectedGame}
                                         onChange={(e) =>
                                             handleGameChange(e.target.value as GameTitle)
                                         }
+                                        disabled={teamsLocked}
                                     >
                                         {GAME_TITLES.map((game) => (
                                             <option key={game} value={game}>
@@ -1556,9 +1884,9 @@ const Dashboard = () => {
                                                 {t('maps.mapLabel')}
                                             </label>
                                             <select
-                                                className="valorant-input mt-1 w-full"
+                                                className="valorant-input mt-1 w-full disabled:cursor-not-allowed disabled:opacity-60"
                                                 value={selectedMap ?? ''}
-                                                disabled={!availableMapOptions.length}
+                                                disabled={!availableMapOptions.length || teamsLocked}
                                                 onChange={(e) =>
                                                     setSelectedMap(e.target.value || null)
                                                 }
@@ -1581,7 +1909,7 @@ const Dashboard = () => {
                                             <button
                                                 type="button"
                                                 onClick={handleRandomizeMap}
-                                                disabled={!availableMapOptions.length}
+                                                disabled={!availableMapOptions.length || teamsLocked}
                                                 className="valorant-btn-outline px-4 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
                                             >
                                                 {t('maps.randomize')}
@@ -1617,7 +1945,7 @@ const Dashboard = () => {
                                                             <button
                                                                 type="button"
                                                                 key={mapName}
-                                                                disabled={mapPreferencesSaving}
+                                                                disabled={mapPreferencesSaving || teamsLocked}
                                                                 onClick={() =>
                                                                     handleToggleMapBan(selectedGame, mapName)
                                                                 }
@@ -1625,7 +1953,7 @@ const Dashboard = () => {
                                                                     banned
                                                                         ? 'border-[#ff4655]/60 bg-[#ff4655]/10 text-[#ff9aa4]'
                                                                         : 'border-white/20 text-white hover:border-white/60'
-                                                                }`}
+                                                                } disabled:cursor-not-allowed disabled:opacity-60`}
                                                             >
                                                                 {mapName}
                                                                 <span className="ml-2 text-[0.6rem] uppercase tracking-[0.12em] text-slate-300">
@@ -1684,13 +2012,24 @@ const Dashboard = () => {
                                     : t('maps.notTracking')}
                             </p>
                         </div>
-                        <button
-                            onClick={openResultModal}
-                            disabled={!canSaveMatch}
-                            className="valorant-btn-primary px-6 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                            {t('actions.saveMatch')}
-                        </button>
+                        <div className="flex flex-wrap gap-2">
+                            {teamsLocked && (
+                                <button
+                                    type="button"
+                                    onClick={handleCancelMatch}
+                                    className="valorant-btn-outline px-6 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {t('actions.cancelMatch')}
+                                </button>
+                            )}
+                            <button
+                                onClick={openResultModal}
+                                disabled={!canSaveMatch}
+                                className="valorant-btn-primary px-6 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                {t('actions.saveMatch')}
+                            </button>
+                        </div>
                     </div>
                 </section>
             </div>
@@ -1706,15 +2045,20 @@ const Dashboard = () => {
                     <p className="mt-4 text-sm text-slate-200">{t('matches.empty')}</p>
                 )}
                 <div className="mt-4 space-y-4">
-                    {matches.map((match) => (
-                        <div
-                            key={match.id}
-                            className="rounded-2xl border border-white/15 bg-white/10 p-4 text-slate-100"
-                        >
+                    {matches.map((match) => {
+                        const isCanceled = match.status === 'canceled';
+                        const statusLabel = isCanceled ? t('matches.canceled') : winnerLabel(match.winner);
+                        const statusClasses = isCanceled ? 'text-[#ff9aa4]' : 'text-slate-200';
+                        return (
+                            <div
+                                key={match.id}
+                                ref={(el) => registerMatchCardRef(match.id, el)}
+                                className="rounded-2xl border border-white/15 bg-white/10 p-4 text-slate-100"
+                            >
                             <div className="flex flex-wrap items-center justify-between gap-2 text-xs tracking-[0.12em] text-slate-200">
                                 <span>{new Date(match.created_at).toLocaleString()}</span>
-                                <span>
-                                    {winnerLabel(match.winner)} · {match.teamA_score} - {match.teamB_score}
+                                <span className={statusClasses}>
+                                    {statusLabel} · {match.teamA_score} - {match.teamB_score}
                                 </span>
                             </div>
                             <div className="mt-2 text-sm text-white">
@@ -1751,22 +2095,36 @@ const Dashboard = () => {
                                     </div>
                                 ))}
                             </div>
-                            <div className="mt-3 flex flex-wrap gap-2 text-xs tracking-[0.12em]">
-                                <button
-                                    onClick={() => openEditResultModal(match)}
-                                    className="valorant-btn-outline px-4 py-2"
-                                >
-                                    {t('matches.editResult')}
-                                </button>
-                                <button
-                                    onClick={() => handleDeleteMatch(match.id)}
-                                    className="valorant-btn-primary px-4 py-2"
-                                >
-                                    {t('actions.deleteMatch')}
-                                </button>
-                            </div>
+                            {!copyingMatchIds.has(match.id) && (
+                                <div className="mt-3 flex flex-wrap gap-2 text-xs tracking-[0.12em]">
+                                    <button
+                                        type="button"
+                                        aria-label={t('actions.copyMatchImage')}
+                                        title={t('actions.copyMatchImage')}
+                                        disabled={isCanceled}
+                                        onClick={() => copyMatchImage(match.id)}
+                                        className="rounded-full border border-white/15 bg-white/5 px-3 py-2 text-lg text-white transition hover:border-white/40 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        <span aria-hidden="true">📸</span>
+                                        <span className="sr-only">{t('actions.copyMatchImage')}</span>
+                                    </button>
+                                    <button
+                                        onClick={() => openEditResultModal(match)}
+                                        disabled={isCanceled}
+                                        className="valorant-btn-outline px-4 py-2 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        {t('matches.editResult')}
+                                    </button>
+                                    <button
+                                        onClick={() => handleDeleteMatch(match.id)}
+                                        className="valorant-btn-primary px-4 py-2"
+                                    >
+                                        {t('actions.deleteMatch')}
+                                    </button>
+                                </div>
+                            )}
                         </div>
-                    ))}
+                    ); })}
                 </div>
             </section>
 
@@ -1833,3 +2191,38 @@ class ApiError extends Error {
         this.status = status;
     }
 }
+type DashboardSettings = {
+    teamNames: typeof DEFAULT_TEAM_NAMES;
+    playersPerTeam: number;
+    mapSelectionEnabled: boolean;
+    selectedGame: GameTitle;
+    selectedMap: string | null;
+    momentumEnabled: boolean;
+};
+
+type PlayersResponse = {
+    players: Player[];
+    total: number;
+};
+
+const loadDashboardSettings = (): Partial<DashboardSettings> => {
+    if (typeof window === 'undefined') {
+        return {};
+    }
+    try {
+        const raw = window.localStorage.getItem(DASHBOARD_SETTINGS_KEY);
+        if (!raw) return {};
+        return JSON.parse(raw) as Partial<DashboardSettings>;
+    } catch {
+        return {};
+    }
+};
+
+const persistDashboardSettings = (settings: DashboardSettings) => {
+    if (typeof window === 'undefined') return;
+    try {
+        window.localStorage.setItem(DASHBOARD_SETTINGS_KEY, JSON.stringify(settings));
+    } catch {
+        // ignore write failures (storage quota, private mode, etc.)
+    }
+};

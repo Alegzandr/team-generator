@@ -165,6 +165,7 @@ db.serialize(() => {
             winner TEXT NOT NULL DEFAULT 'unknown',
             game TEXT,
             map_name TEXT,
+            status TEXT NOT NULL DEFAULT 'completed',
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
         )`
@@ -209,6 +210,7 @@ db.serialize(() => {
     safeAlter(`ALTER TABLE matches ADD COLUMN teamB_score INTEGER NOT NULL DEFAULT 0`);
     safeAlter(`ALTER TABLE matches ADD COLUMN game TEXT`);
     safeAlter(`ALTER TABLE matches ADD COLUMN map_name TEXT`);
+    safeAlter(`ALTER TABLE matches ADD COLUMN status TEXT NOT NULL DEFAULT 'completed'`);
     migratePlayerSkillConstraint();
 });
 

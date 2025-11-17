@@ -19,6 +19,32 @@ export const getPlayersForUser = async (userId: string) => {
     );
 };
 
+export const getPlayersForUserPaginated = async (
+    userId: string,
+    limit: number,
+    offset: number
+) => {
+    const players = await allQuery<PlayerRecord>(
+        `
+        SELECT id, user_id, name, skill
+        FROM players
+        WHERE user_id = ?
+        ORDER BY name COLLATE NOCASE ASC
+        LIMIT ?
+        OFFSET ?
+    `,
+        [userId, limit, offset]
+    );
+    const totalRow = await getQuery<{ count: number }>(
+        `SELECT COUNT(*) as count FROM players WHERE user_id = ?`,
+        [userId]
+    );
+    return {
+        players,
+        total: totalRow?.count ?? 0,
+    };
+};
+
 export const createPlayer = async (
     userId: string,
     data: { name: string; skill: number }

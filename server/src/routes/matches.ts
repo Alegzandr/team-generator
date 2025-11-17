@@ -41,7 +41,7 @@ const normalizeWinner = (
 };
 
 router.post('/', async (req, res) => {
-    const { teamA, teamB, teamA_score, teamB_score, game, map } = req.body || {};
+    const { teamA, teamB, teamA_score, teamB_score, game, map, status } = req.body || {};
     if (!validateTeamPlayers(teamA) || !validateTeamPlayers(teamB)) {
         res.status(400).json({ message: 'Invalid teams payload' });
         return;
@@ -49,7 +49,8 @@ router.post('/', async (req, res) => {
 
     const scoreA = Number(teamA_score ?? 0);
     const scoreB = Number(teamB_score ?? 0);
-    const winner = normalizeWinner(scoreA, scoreB);
+    const normalizedStatus = status === 'canceled' ? 'canceled' : 'completed';
+    const winner = normalizedStatus === 'canceled' ? 'unknown' : normalizeWinner(scoreA, scoreB);
     const normalizedGame =
         typeof game === 'string' && game.trim().length > 0 ? game.trim() : null;
     const normalizedMap =
@@ -64,6 +65,7 @@ router.post('/', async (req, res) => {
             teamB_score: scoreB,
             game: normalizedGame,
             map: normalizedMap,
+            status: normalizedStatus,
         });
         res.status(201).json(match);
     } catch (error) {

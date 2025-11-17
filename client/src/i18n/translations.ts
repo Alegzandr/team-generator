@@ -12,6 +12,9 @@ export const translations = {
         'actions.generateTeams': 'Generate teams',
         'actions.reroll': 'Reroll teams',
         'actions.saveMatch': 'Save match',
+        'actions.copyTeamsImage': 'Copy teams screenshot',
+        'actions.copyMatchImage': 'Copy match screenshot',
+        'actions.cancelMatch': 'Abandon match',
         'actions.saveChanges': 'Save changes',
         'actions.edit': 'Edit',
         'actions.accept': 'Accept',
@@ -34,6 +37,7 @@ export const translations = {
         'players.temporaryTitle': 'Temporary players',
         'players.temporaryHelp':
             'Temporary players are only available for the current session.',
+        'players.allLoaded': 'All players loaded.',
         'players.momentumLabel': 'Momentum',
         'players.momentumTooltip':
             'Momentum is based on matches played in the last few hours. Wins boost, losses reduce.',
@@ -60,6 +64,10 @@ export const translations = {
         'teams.empty': 'No players in this team yet.',
         'teams.fairnessWarning':
             'Teams look unbalanced (difference of {diff}). Drag players until the warning disappears.',
+        'teams.locked':
+            'Teams are locked after sharing. Save or abandon the current match to start again.',
+        'teams.lockedNotice':
+            'Teams locked after sharing. Save the result or abandon the match to unlock editing.',
         'maps.title': 'Map selection',
         'maps.description': 'Optionally pick or roll a map so it is saved with the match.',
         'maps.enable': 'Enable map picker',
@@ -75,6 +83,7 @@ export const translations = {
             'All maps for {game} are disabled. Re-enable some or disable the picker.',
         'maps.noAvailableShort': 'Re-enable at least one map for {game}.',
         'maps.disabledDescription': 'Keep this disabled for games where the map never changes.',
+        'maps.hiddenWhileSharing': 'Map selection hidden while sharing teams.',
         'maps.currentSelection': '{game} · {map}',
         'maps.pending': 'Map missing for this match.',
         'maps.notTracking': 'Map tracking disabled.',
@@ -92,9 +101,11 @@ export const translations = {
         'matches.unknown': 'Result unknown',
         'matches.editResult': 'Edit result',
         'matches.deleteConfirm': 'Delete this match?',
+        'matches.cancelConfirm': 'Abandon this match? It will be stored as canceled.',
         'matches.markWin': 'Mark Team A win',
         'matches.markLoss': 'Mark Team B win',
         'matches.markUnknown': 'Mark unknown',
+        'matches.canceled': 'Match canceled',
         'cookie.title': 'Cookies & GDPR',
         'cookie.description':
             'We only use functional cookies to keep you logged in. By continuing you agree to these cookies.',
@@ -106,6 +117,11 @@ export const translations = {
         'feedback.error': 'Something went wrong. Please retry.',
         'feedback.deleted': 'Your data has been deleted.',
         'feedback.matchDeleted': 'Match removed from history.',
+        'feedback.teamsCopied': 'Teams copied to clipboard.',
+        'feedback.teamsDownloaded': 'Teams image downloaded instead (clipboard unavailable).',
+        'feedback.matchCopied': 'Match screenshot copied.',
+        'feedback.matchDownloaded': 'Match image downloaded instead.',
+        'feedback.canceled': 'Match marked as canceled.',
         'landing.step1': '1. Connect with Discord securely.',
         'landing.step2': '2. Save your player roster with skill ratings.',
         'landing.step3': '3. Generate balanced teams instantly.',
@@ -129,6 +145,9 @@ export const translations = {
         'actions.generateTeams': 'Générer les équipes',
         'actions.reroll': 'Mélanger à nouveau',
         'actions.saveMatch': 'Enregistrer le match',
+        'actions.copyTeamsImage': 'Copier la capture des équipes',
+        'actions.copyMatchImage': 'Copier la capture du match',
+        'actions.cancelMatch': 'Abandonner le match',
         'actions.saveChanges': 'Sauvegarder',
         'actions.edit': 'Modifier',
         'actions.accept': 'Accepter',
@@ -153,6 +172,7 @@ export const translations = {
         'players.temporaryTitle': 'Joueurs temporaires',
         'players.temporaryHelp':
             'Ces joueurs ne sont pas enregistrés dans la base de données.',
+        'players.allLoaded': 'Tous les joueurs sont chargés.',
         'players.momentumLabel': 'Momentum',
         'players.momentumTooltip':
             'Le momentum se base sur les matchs joués récemment. Les victoires ajoutent, les défaites retirent.',
@@ -183,6 +203,10 @@ export const translations = {
         'teams.empty': 'Aucun joueur dans cette équipe.',
         'teams.fairnessWarning':
             'Les équipes semblent déséquilibrées (écart de {diff}). Déplace des joueurs jusqu’à ce que l’alerte disparaisse.',
+        'teams.locked':
+            'Équipes verrouillées après la capture. Enregistre ou abandonne ce match pour recommencer.',
+        'teams.lockedNotice':
+            'Équipes verrouillées après la capture. Enregistre le résultat ou abandonne le match pour déverrouiller.',
         'maps.title': 'Sélection de carte',
         'maps.description': 'Choisis ou tire une carte pour l’associer au match.',
         'maps.enable': 'Activer le sélecteur',
@@ -199,6 +223,7 @@ export const translations = {
             'Toutes les cartes pour {game} sont désactivées. Réactive-en ou désactive le sélecteur.',
         'maps.noAvailableShort': 'Réactive au moins une carte pour {game}.',
         'maps.disabledDescription': 'Laisse cette option désactivée pour les jeux sans rotation.',
+        'maps.hiddenWhileSharing': 'Sélection de carte masquée pendant le partage.',
         'maps.currentSelection': '{game} · {map}',
         'maps.pending': 'Aucune carte sélectionnée pour ce match.',
         'maps.notTracking': 'Carte non suivie.',
@@ -219,6 +244,8 @@ export const translations = {
         'matches.markUnknown': 'Marquer inconnu',
         'matches.editResult': 'Modifier le résultat',
         'matches.deleteConfirm': 'Supprimer ce match ?',
+        'matches.cancelConfirm': 'Abandonner ce match ? Il sera marqué annulé dans l’historique.',
+        'matches.canceled': 'Match annulé',
         'cookie.title': 'Cookies & RGPD',
         'cookie.description':
             'Nous utilisons uniquement des cookies fonctionnels pour garder ta session active. En continuant tu les acceptes.',
@@ -230,6 +257,12 @@ export const translations = {
         'feedback.error': 'Une erreur est survenue. Réessaie.',
         'feedback.deleted': 'Tes données ont été supprimées.',
         'feedback.matchDeleted': 'Match supprimé de l’historique.',
+        'feedback.teamsCopied': 'Équipes copiées dans le presse-papiers.',
+        'feedback.teamsDownloaded':
+            'Image enregistrée (presse-papiers indisponible).',
+        'feedback.matchCopied': 'Capture du match copiée.',
+        'feedback.matchDownloaded': 'Capture du match enregistrée.',
+        'feedback.canceled': 'Match marqué comme annulé.',
         'landing.step1': '1. Connecte-toi via Discord en toute sécurité.',
         'landing.step2': '2. Enregistre tes joueurs avec leur niveau.',
         'landing.step3': '3. Génère des équipes équilibrées instantanément.',
