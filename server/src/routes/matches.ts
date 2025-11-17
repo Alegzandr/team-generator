@@ -8,6 +8,7 @@ import {
     getMatchesForUser,
     updateMatchWinner,
 } from '../services/matchService';
+import { awardMatchCompletionXp, type XpSummary } from '../services/xpService';
 
 const router = express.Router();
 
@@ -41,7 +42,8 @@ const normalizeWinner = (
 };
 
 router.post('/', async (req, res) => {
-    const { teamA, teamB, teamA_score, teamB_score, game, map, status } = req.body || {};
+    const { teamA, teamB, teamA_score, teamB_score, game, map, status, features } =
+        req.body || {};
     if (!validateTeamPlayers(teamA) || !validateTeamPlayers(teamB)) {
         res.status(400).json({ message: 'Invalid teams payload' });
         return;
@@ -56,6 +58,11 @@ router.post('/', async (req, res) => {
     const normalizedMap =
         typeof map === 'string' && map.trim().length > 0 ? map.trim() : null;
 
+    const normalizedFeatures = {
+        mapSelection: Boolean(features?.mapSelection),
+        momentum: Boolean(features?.momentum),
+    };
+
     try {
         const match = await createMatch(req.authUser!.id, {
             teamA,
@@ -67,7 +74,11 @@ router.post('/', async (req, res) => {
             map: normalizedMap,
             status: normalizedStatus,
         });
-        res.status(201).json(match);
+        let xp: XpSummary | undefined;
+        if (normalizedStatus === 'completed') {
+            xp = await awardMatchCompletionXp(req.authUser!.id, match.id, normalizedFeatures);
+        }
+        res.status(201).json({ match, xp });
     } catch (error) {
         res.status(500).json({ message: 'Failed to save match' });
     }

@@ -1,4 +1,13 @@
-import { DragEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+    DragEvent,
+    FormEvent,
+    useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+} from 'react';
+import { createPortal } from 'react-dom';
 import { toPng } from 'html-to-image';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
@@ -7,12 +16,25 @@ import { DEFAULT_GAME, GAME_TITLES, MAP_POOL, type GameTitle } from '../data/map
 import type {
     MapPreferences,
     Match,
+    MatchSaveResponse,
     Player,
+    PlayerMutationResponse,
     TeamPlayer,
     TemporaryPlayer,
     Winner,
+    XpEventResponse,
+    XpRewards,
+    XpSnapshot,
+    XpSummary,
 } from '../types';
 import { TeamAssignment, balanceTeams, getTeamStats } from '../utils/teamBalancer';
+import {
+    XP_LEVEL_BASE,
+    calculateLevelState,
+    generateTeamShareSignature,
+    type LevelState,
+} from '../utils/xp';
+import { clearStoredReferral, getStoredReferral } from '../utils/referral';
 import SkillSelector from './SkillSelector';
 import MatchResultModal from './MatchResultModal';
 
@@ -127,6 +149,95 @@ const calculateMomentumMap = (
     return map;
 };
 
+const useAnimatedNumber = (value: number, duration = 600) => {
+    const [displayValue, setDisplayValue] = useState(value);
+    const rafRef = useRef<number | null>(null);
+    const startValueRef = useRef(value);
+
+    useEffect(() => {
+        if (typeof window === 'undefined' || !window.requestAnimationFrame) {
+            setDisplayValue(value);
+            startValueRef.current = value;
+            return;
+        }
+        const startValue = startValueRef.current;
+        const startTime = performance.now();
+        const step = (time: number) => {
+            const elapsed = time - startTime;
+            const progress = duration ? Math.min(elapsed / duration, 1) : 1;
+            const nextValue = startValue + (value - startValue) * progress;
+            setDisplayValue(Math.round(nextValue));
+            if (progress < 1) {
+                rafRef.current = requestAnimationFrame(step);
+            } else {
+                startValueRef.current = value;
+            }
+        };
+        if (rafRef.current !== null) {
+            cancelAnimationFrame(rafRef.current);
+        }
+        rafRef.current = requestAnimationFrame(step);
+        return () => {
+            if (rafRef.current !== null) {
+                cancelAnimationFrame(rafRef.current);
+            }
+        };
+    }, [value, duration]);
+
+    return displayValue;
+};
+
+type XpTooltipRequest = {
+    label: string;
+    value: number;
+    position: 'right' | 'top';
+    rect: DOMRect;
+};
+
+const XpDot = ({
+    label,
+    value,
+    position,
+    onShow,
+    onHide,
+}: {
+    label?: string;
+    value?: number;
+    position?: 'right' | 'top';
+    onShow?: (request: XpTooltipRequest) => void;
+    onHide?: () => void;
+}) => {
+    const dotRef = useRef<HTMLSpanElement | null>(null);
+
+    const handleEnter = () => {
+        if (!label || typeof value !== 'number' || value === 0) {
+            return;
+        }
+        if (!dotRef.current) return;
+        const rect = dotRef.current.getBoundingClientRect();
+        onShow?.({
+            label,
+            value,
+            rect,
+            position: position ?? 'right',
+        });
+    };
+    if (!label || typeof value !== 'number' || value === 0) {
+        return null;
+    }
+    return (
+        <span
+            ref={dotRef}
+            className="inline-flex h-2 w-2 rounded-full bg-yellow-300 shadow-[0_0_8px_rgba(250,204,21,0.85)]"
+            onMouseEnter={handleEnter}
+            onFocus={handleEnter}
+            onMouseLeave={onHide}
+            onBlur={onHide}
+            role="presentation"
+        />
+    );
+};
+
 const augmentPlayerWithMomentum = <T extends { id?: number | string; name: string; skill: number }>(
     player: T,
     momentumMap: Record<string, number>
@@ -226,6 +337,26 @@ const Dashboard = () => {
     const [resultModalOpen, setResultModalOpen] = useState(false);
     const [resultModalMode, setResultModalMode] = useState<'new' | 'edit'>('new');
     const [matchBeingEdited, setMatchBeingEdited] = useState<Match | null>(null);
+    const [xpState, setXpState] = useState<LevelState | null>(null);
+    const [xpTicker, setXpTicker] = useState<XpSummary | null>(null);
+    const xpFlashTimerRef = useRef<number | null>(null);
+    const xpLoadedRef = useRef(false);
+    const shareSignatureCache = useRef<Set<string>>(new Set());
+    const matchScreenshotCache = useRef<Set<number>>(new Set());
+    const referralClaimingRef = useRef(false);
+    const [copyingShareLink, setCopyingShareLink] = useState(false);
+    const [shareStatus, setShareStatus] = useState<'idle' | 'copied' | 'error'>('idle');
+    const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+    const [deleteConfirmation, setDeleteConfirmation] = useState('');
+    const [deleteSubmitting, setDeleteSubmitting] = useState(false);
+    const [xpTooltip, setXpTooltip] = useState<{
+        label: string;
+        value: number;
+        position: 'right' | 'top';
+        x: number;
+        y: number;
+    } | null>(null);
+    const [xpRewards, setXpRewards] = useState<XpRewards | null>(null);
 
     const activeMomentumGame = mapSelectionEnabled ? selectedGame : undefined;
 
@@ -291,6 +422,15 @@ const Dashboard = () => {
           )
         : 0;
     const fairnessWarning = teamsReady && fairnessDiff > FAIRNESS_THRESHOLD;
+    const xpLevelValue = xpState?.level ?? 1;
+    const xpIntoLevel = Math.round(xpState?.xpIntoLevel ?? 0);
+    const xpRequired = xpState?.xpForLevel ?? XP_LEVEL_BASE;
+    const xpProgress = Math.max(0, Math.min(1, xpState?.progress ?? 0));
+    const animatedLevel = useAnimatedNumber(xpLevelValue);
+    const animatedXpIntoLevel = useAnimatedNumber(xpIntoLevel);
+    const xpCircleRadius = 26;
+    const xpCircumference = 2 * Math.PI * xpCircleRadius;
+    const xpStrokeOffset = xpCircumference * (1 - xpProgress);
 
     const apiRequest = useCallback(
         async <T,>(path: string, options: RequestInit = {}): Promise<T> => {
@@ -321,6 +461,191 @@ const Dashboard = () => {
         },
         [logout]
     );
+
+    const applyXpSummary = useCallback((summary?: XpSummary) => {
+        if (!summary) return;
+        setXpState(calculateLevelState(summary.total));
+        if (summary.delta !== 0) {
+            setXpTicker(summary);
+        }
+    }, []);
+
+    const handleXpEnvelope = useCallback(
+        (payload?: { xp?: XpSummary }) => {
+            if (payload?.xp) {
+                applyXpSummary(payload.xp);
+            }
+        },
+        [applyXpSummary]
+    );
+
+    const requestXpEvent = useCallback(
+        (type: 'team_share' | 'match_screenshot', payload: Record<string, unknown>) => {
+            return apiRequest<XpEventResponse>('/api/xp/events', {
+                method: 'POST',
+                body: JSON.stringify({ type, payload }),
+            });
+        },
+        [apiRequest]
+    );
+
+    const showXpTooltip = useCallback(
+        (request: XpTooltipRequest) => {
+            const { label, value, position, rect } = request;
+            const coords =
+                position === 'top'
+                    ? {
+                          x: rect.left + rect.width / 2,
+                          y: rect.top - 8,
+                      }
+                    : {
+                          x: rect.right + 8,
+                          y: rect.top + rect.height / 2,
+                      };
+            setXpTooltip({
+                label,
+                value,
+                position,
+                x: coords.x,
+                y: coords.y,
+            });
+        },
+        []
+    );
+
+    const hideXpTooltip = useCallback(() => {
+        setXpTooltip(null);
+    }, []);
+
+    useEffect(() => {
+        let cancelled = false;
+        const loadXp = async () => {
+            try {
+                const snapshot = await apiRequest<XpSnapshot>('/api/xp');
+                if (!cancelled) {
+                    xpLoadedRef.current = true;
+                    setXpState(calculateLevelState(snapshot.xp ?? 0));
+                }
+            } catch (error) {
+                console.error('Failed to load XP snapshot', error);
+            }
+        };
+        loadXp();
+        return () => {
+            cancelled = true;
+        };
+    }, [apiRequest]);
+
+    useEffect(() => {
+        let cancelled = false;
+        const loadRewards = async () => {
+            try {
+                const rewards = await apiRequest<XpRewards>('/api/xp/rewards');
+                if (!cancelled) {
+                    setXpRewards(rewards);
+                }
+            } catch (error) {
+                console.error('Failed to load XP rewards', error);
+            }
+        };
+        loadRewards();
+        return () => {
+            cancelled = true;
+        };
+    }, [apiRequest]);
+
+    useEffect(() => {
+        if (!xpTicker) {
+            return;
+        }
+        if (xpFlashTimerRef.current) {
+            window.clearTimeout(xpFlashTimerRef.current);
+        }
+        xpFlashTimerRef.current = window.setTimeout(() => setXpTicker(null), 2600);
+        return () => {
+            if (xpFlashTimerRef.current) {
+                window.clearTimeout(xpFlashTimerRef.current);
+            }
+        };
+    }, [xpTicker]);
+
+    useEffect(() => {
+        if (!user) return;
+        const stored = getStoredReferral();
+        if (!stored) return;
+        if (stored === user.id) {
+            clearStoredReferral();
+            return;
+        }
+        if (referralClaimingRef.current) return;
+        referralClaimingRef.current = true;
+        const claim = async () => {
+            try {
+                await apiRequest<{ credited: boolean }>('/api/xp/referrals/claim', {
+                    method: 'POST',
+                    body: JSON.stringify({ referrerId: stored }),
+                });
+                clearStoredReferral();
+            } catch (error) {
+                referralClaimingRef.current = false;
+                console.error('Failed to claim referral', error);
+            }
+        };
+        claim();
+    }, [user, apiRequest]);
+
+    useEffect(() => {
+        if (!user) return;
+        if (typeof window === 'undefined') return;
+        let socket: WebSocket | null = null;
+        let reconnectTimer: number | null = null;
+        let stopped = false;
+
+        const buildWsUrl = () => {
+            try {
+                const base = API_URL || window.location.origin;
+                const url = new URL('/ws', base);
+                url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+                return url.toString();
+            } catch (error) {
+                console.error('Failed to resolve websocket URL', error);
+                return null;
+            }
+        };
+
+        const connect = () => {
+            const wsUrl = buildWsUrl();
+            if (!wsUrl) return;
+            socket = new WebSocket(wsUrl);
+            socket.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data?.type === 'xp:update') {
+                        applyXpSummary(data.payload as XpSummary);
+                    }
+                } catch (error) {
+                    console.error('Failed to parse XP stream payload', error);
+                }
+            };
+            socket.onclose = () => {
+                if (stopped) return;
+                reconnectTimer = window.setTimeout(connect, 4000);
+            };
+            socket.onerror = () => {
+                socket?.close();
+            };
+        };
+
+        connect();
+
+        return () => {
+            stopped = true;
+            if (reconnectTimer) {
+                window.clearTimeout(reconnectTimer);
+            }
+            socket?.close();
+        };
+    }, [user, applyXpSummary]);
 
     const ensureMatchReady = () => {
         if (!teamsReady) {
@@ -431,6 +756,19 @@ const Dashboard = () => {
                 pushToast(t('feedback.teamsDownloaded'), 'info');
             }
             setTeamsLocked(true);
+            try {
+                const signature = await generateTeamShareSignature(teams, {
+                    game: mapSelectionEnabled ? selectedGame : null,
+                    map: mapSelectionEnabled ? selectedMap : null,
+                });
+                if (!shareSignatureCache.current.has(signature)) {
+                    const response = await requestXpEvent('team_share', { signature });
+                    shareSignatureCache.current.add(signature);
+                    handleXpEnvelope(response);
+                }
+            } catch (error) {
+                console.error('Failed to award screenshot XP', error);
+            }
         } catch (error) {
             console.error('Failed to copy teams image', error);
             pushToast(t('feedback.error'), 'error');
@@ -438,6 +776,41 @@ const Dashboard = () => {
             setCopyingTeams(false);
             copyingTeamsRef.current = false;
         }
+    };
+
+    const handleShareInvite = async () => {
+        if (!user || copyingShareLink) return;
+        setCopyingShareLink(true);
+        setShareStatus('idle');
+        try {
+            const target = new URL(window.location.href);
+            target.searchParams.set('ref', user.id);
+            const shareLink = target.toString();
+            if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(shareLink);
+            } else {
+                const textarea = document.createElement('textarea');
+                textarea.value = shareLink;
+                textarea.style.position = 'fixed';
+                textarea.style.left = '-9999px';
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+            }
+            setShareStatus('copied');
+        } catch (error) {
+            console.error('Failed to copy share link', error);
+            setShareStatus('error');
+        } finally {
+            setCopyingShareLink(false);
+        }
+    };
+
+    const openDeleteModal = () => {
+        setDeleteConfirmation('');
+        setDeleteSubmitting(false);
+        setDeleteModalOpen(true);
     };
 
     const handleToggleMapBan = async (game: GameTitle, mapName: string) => {
@@ -722,17 +1095,18 @@ const Dashboard = () => {
             return;
         }
         try {
-            const player = await apiRequest<Player>('/api/players', {
+            const response = await apiRequest<PlayerMutationResponse>('/api/players', {
                 method: 'POST',
                 body: JSON.stringify({
                     name: playerName.trim(),
                     skill: playerSkill,
                 }),
             });
-            setPlayers((prev) => [...prev, player]);
+            setPlayers((prev) => [...prev, response.player]);
             setPlayerName('');
             setPlayerSkill(5);
             pushToast(t('actions.addPlayer'), 'success');
+            handleXpEnvelope(response);
         } catch (error) {
             pushToast(t('feedback.error'), 'error');
         }
@@ -743,7 +1117,10 @@ const Dashboard = () => {
             return;
         }
         try {
-            await apiRequest(`/api/players/${playerId}`, { method: 'DELETE' });
+            const response = await apiRequest<{ xp?: XpSummary }>(
+                `/api/players/${playerId}`,
+                { method: 'DELETE' }
+            );
             setPlayers((prev) => prev.filter((player) => player.id !== playerId));
             setSelectedPlayerIds((prev) => {
                 const next = new Set(prev);
@@ -751,6 +1128,7 @@ const Dashboard = () => {
                 return next;
             });
             pushToast(t('actions.remove'), 'info');
+            handleXpEnvelope(response);
         } catch (error) {
             pushToast(t('feedback.error'), 'error');
         }
@@ -849,15 +1227,16 @@ const Dashboard = () => {
             return next;
         });
         try {
-            const newPlayer = await apiRequest<Player>('/api/players', {
+            const response = await apiRequest<PlayerMutationResponse>('/api/players', {
                 method: 'POST',
                 body: JSON.stringify({
                     name: tempPlayer.name,
                     skill: tempPlayer.skill,
                 }),
             });
-            setPlayers((prev) => insertAt(prev, newPlayer, insertIndex));
+            setPlayers((prev) => insertAt(prev, response.player, insertIndex));
             pushToast(t('actions.addPlayer'), 'success');
+            handleXpEnvelope(response);
         } catch (error) {
             setTemporaryPlayers((prev) => insertAt(prev, tempPlayer, insertIndex));
             setSelectedTemporaryIds((prev) => {
@@ -1095,7 +1474,7 @@ const copyElementToClipboard = async (element: HTMLElement) => {
         scores: { teamA: number; teamB: number }
     ) => {
         try {
-            const match = await apiRequest<Match>('/api/matches', {
+            const response = await apiRequest<MatchSaveResponse>('/api/matches', {
                 method: 'POST',
                 body: JSON.stringify({
                     teamA: sanitizeTeam(teams.teamA),
@@ -1105,14 +1484,20 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                     game: mapSelectionEnabled ? selectedGame : null,
                     map: mapSelectionEnabled ? selectedMap : null,
                     status,
+                    features: {
+                        mapSelection: mapSelectionEnabled,
+                        momentum: momentumEnabled,
+                    },
                 }),
             });
+            const match = response.match;
             setMatches((prev) => [match, ...prev]);
             setTeamsLocked(false);
             pushToast(
                 status === 'canceled' ? t('feedback.canceled') : t('feedback.saved'),
                 status === 'canceled' ? 'info' : 'success'
             );
+            handleXpEnvelope(response);
         } catch (error) {
             pushToast(t('feedback.error'), 'error');
         }
@@ -1138,6 +1523,15 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                 pushToast(t('feedback.matchCopied'), 'success');
             } else {
                 pushToast(t('feedback.matchDownloaded'), 'info');
+            }
+            if (!matchScreenshotCache.current.has(matchId)) {
+                try {
+                    const response = await requestXpEvent('match_screenshot', { matchId });
+                    matchScreenshotCache.current.add(matchId);
+                    handleXpEnvelope(response);
+                } catch (error) {
+                    console.error('Failed to award match screenshot XP', error);
+                }
             }
         } catch (error) {
             console.error('Failed to copy match image', error);
@@ -1209,14 +1603,23 @@ const copyElementToClipboard = async (element: HTMLElement) => {
         }
     };
 
+    const closeDeleteModal = () => {
+        setDeleteModalOpen(false);
+        setDeleteSubmitting(false);
+        setDeleteConfirmation('');
+    };
+
     const handleDeleteAccount = async () => {
-        if (!window.confirm(t('gdpr.deleteConfirm'))) return;
+        if (deleteConfirmation !== 'DELETE') return;
+        setDeleteSubmitting(true);
         try {
             await apiRequest('/api/user', { method: 'DELETE' });
             pushToast(t('feedback.deleted'), 'info');
+            closeDeleteModal();
             await logout({ silent: true });
         } catch (error) {
             pushToast(t('feedback.error'), 'error');
+            setDeleteSubmitting(false);
         }
     };
 
@@ -1320,10 +1723,40 @@ const copyElementToClipboard = async (element: HTMLElement) => {
         );
     };
 
+    const xpTooltipNode =
+        typeof document !== 'undefined' && xpTooltip
+            ? createPortal(
+                  <div
+                      className="pointer-events-none fixed z-[9999]"
+                      style={{
+                          left: xpTooltip.x,
+                          top: xpTooltip.y,
+                          transform:
+                              xpTooltip.position === 'top'
+                                  ? 'translate(-50%, -100%)'
+                                  : 'translate(0, -50%)',
+                      }}
+                  >
+                      <div className="rounded-2xl border border-white/15 bg-[#0f101a]/95 px-3 py-2 text-[0.65rem] uppercase tracking-[0.18em] text-white shadow-[0_10px_30px_rgba(0,0,0,0.6)]">
+                          <span className="mr-2 text-yellow-200">{xpTooltip.label}</span>
+                          <span
+                              className={
+                                  xpTooltip.value >= 0 ? 'text-emerald-200' : 'text-rose-200'
+                              }
+                          >
+                              {xpTooltip.value >= 0 ? '+' : ''}
+                              {xpTooltip.value} XP
+                          </span>
+                      </div>
+                  </div>,
+                  document.body
+              )
+            : null;
+
     return (
         <div className="app-shell flex flex-col gap-10 py-12 text-white">
             <header className="valorant-panel valorant-panel--glow sticky top-4 z-10 border border-white/10 backdrop-blur supports-[backdrop-filter]:bg-white/5 shadow-[0_10px_30px_rgba(5,6,15,0.45)]">
-                <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                     <div className="flex items-center gap-3">
                         {user?.avatar ? (
                             <img
@@ -1341,22 +1774,86 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                             <p className="text-xl font-semibold text-white">{user?.username}</p>
                         </div>
                     </div>
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
+                        <div className="flex items-center gap-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                            <div className="relative h-16 w-16">
+                                <svg
+                                    viewBox={`0 0 ${(xpCircleRadius + 6) * 2} ${(xpCircleRadius + 6) * 2}`}
+                                    className="h-16 w-16 rotate-[-90deg]"
+                                >
+                                    <circle
+                                        cx={xpCircleRadius + 6}
+                                        cy={xpCircleRadius + 6}
+                                        r={xpCircleRadius}
+                                        className="stroke-white/15"
+                                        strokeWidth="4"
+                                        fill="transparent"
+                                    />
+                                    <circle
+                                        cx={xpCircleRadius + 6}
+                                        cy={xpCircleRadius + 6}
+                                        r={xpCircleRadius}
+                                        className="stroke-[#ff8ad4]"
+                                        strokeWidth="4"
+                                        strokeLinecap="round"
+                                        fill="transparent"
+                                        strokeDasharray={xpCircumference}
+                                        strokeDashoffset={xpStrokeOffset}
+                                        style={{ transition: 'stroke-dashoffset 0.85s ease' }}
+                                    />
+                                </svg>
+                                <span className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm font-semibold text-white">
+                                    {animatedLevel}
+                                </span>
+                            </div>
+                            <div>
+                                <p className="text-xs uppercase tracking-[0.15em] text-slate-300">
+                                    {t('xp.label')}
+                                </p>
+                                <p className="text-sm font-semibold text-white">
+                                    {animatedXpIntoLevel} / {xpRequired} XP
+                                </p>
+                                {xpTicker && xpTicker.delta !== 0 && (
+                                    <span
+                                        className={`text-xs font-semibold ${
+                                            xpTicker.delta > 0 ? 'text-emerald-300' : 'text-rose-300'
+                                        }`}
+                                    >
+                                        {xpTicker.delta > 0 ? '+' : ''}
+                                        {xpTicker.delta} XP
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </header>
 
             <div className="grid gap-6 lg:grid-cols-2">
                 <section className="valorant-panel flex flex-col gap-6">
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <h2 className="text-xl font-semibold text-white">
-                                {t('players.title')}
-                            </h2>
-                            <p className="text-sm text-slate-100">
-                                {t('players.selectHelp')}
-                            </p>
+                    <div className="flex flex-col gap-3">
+                        <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                            <div>
+                                <h2 className="text-xl font-semibold text-white">
+                                    {t('players.title')}
+                                </h2>
+                                <p className="text-sm text-slate-100">
+                                    {t('players.selectHelp')}
+                                </p>
+                            </div>
+                            {xpRewards && (
+                                <div className="flex gap-3 text-xs text-slate-400">
+                                    <XpDot
+                                        label={t('xp.playerAdd')}
+                                        value={xpRewards.playerCreate}
+                                        onShow={showXpTooltip}
+                                        onHide={hideXpTooltip}
+                                    />
+                                </div>
+                            )}
                         </div>
                         <button
-                            className="text-xs font-semibold tracking-[0.12em] text-cyan-300 disabled:text-slate-500"
+                            className="self-start text-xs font-semibold tracking-[0.12em] text-cyan-300 disabled:text-slate-500"
                             disabled={!players.length}
                             onClick={toggleAllSavedSelections}
                         >
@@ -1755,17 +2252,26 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                         >
                             {t('actions.reroll')}
                         </button>
-                        <button
-                            type="button"
-                            aria-label={t('actions.copyTeamsImage')}
-                            title={t('actions.copyTeamsImage')}
-                            onClick={copyTeamsImage}
-                            disabled={!teamsReady}
-                            className="rounded-full border border-white/15 bg-white/5 px-3 py-2 text-lg text-white transition hover:border-white/40 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                            <span aria-hidden="true">📸</span>
-                            <span className="sr-only">{t('actions.copyTeamsImage')}</span>
-                        </button>
+                        <div className="flex items-center gap-2">
+                            <button
+                                type="button"
+                                aria-label={t('actions.copyTeamsImage')}
+                                title={t('actions.copyTeamsImage')}
+                                onClick={copyTeamsImage}
+                                disabled={!teamsReady}
+                                className="rounded-full border border-white/15 bg-white/5 px-3 py-2 text-lg text-white transition hover:border-white/40 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                <span aria-hidden="true">📸</span>
+                                <span className="sr-only">{t('actions.copyTeamsImage')}</span>
+                            </button>
+                            <XpDot
+                                label={t('xp.teamShare')}
+                                value={xpRewards?.teamShare}
+                                position="top"
+                                onShow={showXpTooltip}
+                                onHide={hideXpTooltip}
+                            />
+                        </div>
                     </div>
                     <div ref={teamsSnapshotRef}>
                         {mapSelectionEnabled && !mapUnavailable && selectedMap && (
@@ -1820,7 +2326,7 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                                     }
                                     setMomentumEnabled((prev) => !prev);
                                 }}
-                                className={`rounded-full border px-4 py-2 text-xs font-semibold tracking-[0.12em] transition ${
+                                className={`rounded-full border px-4 py-2 text-xs font-semibold tracking-[0.12em] uppercase transition ${
                                     momentumEnabled
                                         ? 'border-[#ff5c8a]/40 bg-[#ff5c8a]/20 text-white shadow-[0_4px_16px_rgba(255,92,138,0.25)]'
                                         : 'border-white/15 bg-white/5 text-slate-200 hover:border-white/40 hover:text-white'
@@ -2012,7 +2518,7 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                                     : t('maps.notTracking')}
                             </p>
                         </div>
-                        <div className="flex flex-wrap gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                             {teamsLocked && (
                                 <button
                                     type="button"
@@ -2029,6 +2535,30 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                             >
                                 {t('actions.saveMatch')}
                             </button>
+                            <div className="flex items-center gap-2">
+                                <XpDot
+                                    label={t('xp.matchBase')}
+                                    value={xpRewards?.matchBase}
+                                    onShow={showXpTooltip}
+                                    onHide={hideXpTooltip}
+                                />
+                                {mapSelectionEnabled && (
+                                    <XpDot
+                                        label={t('xp.mapBonus')}
+                                        value={xpRewards?.matchMapBonus}
+                                        onShow={showXpTooltip}
+                                        onHide={hideXpTooltip}
+                                    />
+                                )}
+                                {momentumEnabled && (
+                                    <XpDot
+                                        label={t('xp.momentumBonus')}
+                                        value={xpRewards?.matchMomentumBonus}
+                                        onShow={showXpTooltip}
+                                        onHide={hideXpTooltip}
+                                    />
+                                )}
+                            </div>
                         </div>
                     </div>
                 </section>
@@ -2097,17 +2627,26 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                             </div>
                             {!copyingMatchIds.has(match.id) && (
                                 <div className="mt-3 flex flex-wrap gap-2 text-xs tracking-[0.12em]">
-                                    <button
-                                        type="button"
-                                        aria-label={t('actions.copyMatchImage')}
-                                        title={t('actions.copyMatchImage')}
-                                        disabled={isCanceled}
-                                        onClick={() => copyMatchImage(match.id)}
-                                        className="rounded-full border border-white/15 bg-white/5 px-3 py-2 text-lg text-white transition hover:border-white/40 disabled:cursor-not-allowed disabled:opacity-60"
-                                    >
-                                        <span aria-hidden="true">📸</span>
-                                        <span className="sr-only">{t('actions.copyMatchImage')}</span>
-                                    </button>
+                                    <div className="flex flex-col items-center gap-2">
+                                        <button
+                                            type="button"
+                                            aria-label={t('actions.copyMatchImage')}
+                                            title={t('actions.copyMatchImage')}
+                                            disabled={isCanceled}
+                                            onClick={() => copyMatchImage(match.id)}
+                                            className="rounded-full border border-white/15 bg-white/5 px-3 py-2 text-lg text-white transition hover:border-white/40 disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            <span aria-hidden="true">📸</span>
+                                            <span className="sr-only">{t('actions.copyMatchImage')}</span>
+                                        </button>
+                                        <XpDot
+                                            label={t('xp.historyShot')}
+                                            value={xpRewards?.matchScreenshot}
+                                            position="top"
+                                            onShow={showXpTooltip}
+                                            onHide={hideXpTooltip}
+                                        />
+                                    </div>
                                     <button
                                         onClick={() => openEditResultModal(match)}
                                         disabled={isCanceled}
@@ -2142,7 +2681,46 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                 onClose={() => setResultModalOpen(false)}
                 onConfirm={handleModalConfirm}
             />
-            <footer className="valorant-panel flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            {deleteModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-6">
+                    <div className="w-full max-w-md rounded-3xl border border-white/10 bg-[#0f101a] p-6 text-white shadow-2xl">
+                        <h3 className="text-xl font-semibold">
+                            {t('gdpr.deleteModalTitle')}
+                        </h3>
+                        <p className="mt-2 text-sm text-slate-200">
+                            {t('gdpr.deleteInstructions')}
+                        </p>
+                        <input
+                            className="valorant-input mt-4 w-full uppercase"
+                            placeholder={t('gdpr.deletePlaceholder')}
+                            value={deleteConfirmation}
+                            onChange={(e) => setDeleteConfirmation(e.target.value.toUpperCase())}
+                        />
+                        <p className="mt-2 text-xs text-[#ff9aa4]">
+                            {t('gdpr.deleteWarning')}
+                        </p>
+                        <div className="mt-4 flex flex-wrap gap-3">
+                            <button
+                                type="button"
+                                onClick={closeDeleteModal}
+                                className="valorant-btn-outline px-4 py-2 text-xs"
+                                disabled={deleteSubmitting}
+                            >
+                                {t('actions.cancel')}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleDeleteAccount}
+                                disabled={deleteConfirmation !== 'DELETE' || deleteSubmitting}
+                                className="valorant-btn-primary px-4 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                {deleteSubmitting ? t('actions.deleteAccount') : t('gdpr.deleteAction')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            <footer className="valorant-panel flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
                 <div>
                     <p className="text-xs tracking-[0.12em] text-slate-200">
                         {t('language.label')}
@@ -2163,6 +2741,35 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                         ))}
                     </div>
                 </div>
+                <div className="flex flex-col gap-2 text-sm text-slate-200">
+                    <p>
+                        {xpRewards
+                            ? t('xp.shareFooter', { amount: xpRewards.referralBonus })
+                            : t('xp.shareFooterFallback')}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={handleShareInvite}
+                            disabled={copyingShareLink}
+                            className="valorant-btn-outline whitespace-nowrap px-4 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                            {copyingShareLink ? t('xp.sharing') : t('actions.shareTool')}
+                        </button>
+                        <XpDot
+                            label={t('xp.shareTag')}
+                            value={xpRewards?.referralBonus}
+                            onShow={showXpTooltip}
+                            onHide={hideXpTooltip}
+                        />
+                    </div>
+                    {shareStatus === 'copied' && (
+                        <p className="text-xs text-emerald-300">{t('xp.shareCopied')}</p>
+                    )}
+                    {shareStatus === 'error' && (
+                        <p className="text-xs text-rose-300">{t('xp.shareError')}</p>
+                    )}
+                </div>
                 <div className="flex flex-wrap gap-3">
                     <button
                         onClick={() => logout()}
@@ -2171,13 +2778,14 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                         {t('actions.logout')}
                     </button>
                     <button
-                        onClick={handleDeleteAccount}
+                        onClick={openDeleteModal}
                         className="valorant-btn-primary px-6 py-2 text-xs"
                     >
                         {t('actions.deleteAccount')}
                     </button>
                 </div>
             </footer>
+            {xpTooltipNode}
         </div>
     );
 };

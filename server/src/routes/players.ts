@@ -6,6 +6,10 @@ import {
     getPlayersForUserPaginated,
     updatePlayer,
 } from '../services/playerService';
+import {
+    awardPlayerCreationXp,
+    awardPlayerRemovalPenalty,
+} from '../services/xpService';
 
 const router = express.Router();
 
@@ -53,7 +57,8 @@ router.post('/', async (req, res) => {
             res.status(500).json({ message: 'Failed to load player' });
             return;
         }
-        res.status(201).json(player);
+        const xp = await awardPlayerCreationXp(req.authUser!.id, player.id);
+        res.status(201).json({ player, xp });
     } catch (error) {
         res.status(500).json({ message: 'Failed to create player' });
     }
@@ -67,8 +72,13 @@ router.delete('/:id', async (req, res) => {
     }
 
     try {
-        await deletePlayer(req.authUser!.id, playerId);
-        res.status(204).send();
+        const deleted = await deletePlayer(req.authUser!.id, playerId);
+        if (!deleted) {
+            res.status(404).json({ message: 'Player not found' });
+            return;
+        }
+        const xp = await awardPlayerRemovalPenalty(req.authUser!.id, playerId);
+        res.json({ xp });
     } catch (error) {
         res.status(500).json({ message: 'Failed to delete player' });
     }

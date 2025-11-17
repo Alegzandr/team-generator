@@ -5,6 +5,7 @@ export interface StoredUser {
     username: string;
     avatar: string | null;
     token_version: number;
+    xp_total?: number;
 }
 
 export interface UserUpsertInput {
@@ -35,7 +36,7 @@ export const upsertUser = async (user: UserUpsertInput) => {
 
 export const getUserById = async (id: string) => {
     return getQuery<StoredUser>(
-        'SELECT id, username, avatar, token_version FROM users WHERE id = ?',
+        'SELECT id, username, avatar, token_version, xp_total FROM users WHERE id = ?',
         [id]
     );
 };
@@ -48,7 +49,7 @@ export const deleteUserAndData = async (userId: string) => {
 
 export const getUsers = async () => {
     return allQuery<StoredUser>(
-        'SELECT id, username, avatar, token_version FROM users',
+        'SELECT id, username, avatar, token_version, xp_total FROM users',
         []
     );
 };

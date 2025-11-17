@@ -6,6 +6,9 @@ import { AuthProvider } from './context/AuthContext.tsx';
 import { LanguageProvider } from './context/LanguageContext.tsx';
 import { ToastProvider } from './context/ToastContext.tsx';
 import ToastStack from './components/ToastStack.tsx';
+import { captureReferralFromUrl } from './utils/referral.ts';
+
+captureReferralFromUrl();
 
 createRoot(document.getElementById('root')!).render(
     <BrowserRouter>

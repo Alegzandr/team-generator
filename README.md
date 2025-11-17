@@ -11,6 +11,7 @@
 -   **Drag-first team builder** – generate proposed teams, then drag players directly between columns (even to swap with a full roster). A fairness warning appears if skills drift too far apart, and post-screenshot locks make it clear when you must record or abandon the match.
 -   **Clipboard-ready screenshots** – share the current teams or any match in history via a single camera button. The UI hides helper text automatically and falls back to downloading if the clipboard API is unavailable.
 -   **Match scoring history** – saving or abandoning a match records rosters, map, and status (completed/canceled). Any entry can be edited, deleted, or copied as an image; canceled rows remain visible for audit trails.
+-   **XP & referrals** – every saved match, screenshot, or player-management action grants (or sometimes removes) XP that fuels a level gauge. Inviting friends with a one-tap share link awards a referral bonus when they log in. XP changes stream in via WebSockets so multiple tabs stay in sync.
 -   **Localization + GDPR** – English/French toggle, cookie consent banner, “delete everything” endpoint, and automatic inactive-user pruning keep the app compliant.
 -   **Docker-ready** – one `docker compose up` brings up the API, client bundle, and reverse proxy.
 
@@ -116,6 +117,11 @@ docker compose up --build
 | GET/POST/PATCH/DELETE | `/api/players`               | CRUD for saved players (`GET` accepts `limit`/`offset`, defaults 20, returns `{ players, total }`) |
 | GET/POST/PATCH/DELETE | `/api/matches`               | List, store, update, delete match results (scores + rosters + map info) |
 | GET/PUT               | `/api/maps/preferences`      | Fetch or persist per-game banned maps for the picker |
+| GET                   | `/api/xp`                    | Current XP total (powers the level gauge)                     |
+| GET                   | `/api/xp/rewards`            | XP amounts for matches, screenshots, roster changes, referrals |
+| POST                  | `/api/xp/events`             | Claim XP for share/screenshot events (server validates spam guards) |
+| POST                  | `/api/xp/referrals/claim`    | Credit a referrer once the invitee logs in                   |
+| WebSocket             | `/ws`                        | Authenticated XP updates pushed to every open tab            |
 
 Browser clients must send `credentials: 'include'` so the HttpOnly `COOKIE_NAME` authentication cookie is attached to API calls; no `Authorization` header is necessary.
 
@@ -123,10 +129,12 @@ Browser clients must send `credentials: 'include'` so the HttpOnly `COOKIE_NAME`
 
 | Table     | Columns                                                                                 |
 | --------- | --------------------------------------------------------------------------------------- |
-| `users`   | `id`, `username`, `avatar`, `last_active`, `token_version`                              |
+| `users`   | `id`, `username`, `avatar`, `last_active`, `token_version`, `xp_total`                  |
 | `players` | `id`, `user_id`, `name`, `skill` (0‑10)                                                  |
 | `matches` | `id`, `user_id`, `teamA`, `teamB`, `teamA_score`, `teamB_score`, `winner`, `game`, `map_name`, `created_at` |
 | `map_preferences` | `user_id`, `preferences` (JSON blob of banned maps per title)                               |
+| `xp_events` | `id`, `user_id`, `type`, `context`, `amount`, `created_at`                                      |
+| `referrals` | `id`, `referrer_id`, `referred_id`, `created_at`                                                 |
 
 Foreign keys cascade so GDPR deletion wipes dependent rows automatically.
 

@@ -179,6 +179,31 @@ db.serialize(() => {
         )`
     );
 
+    db.run(
+        `CREATE TABLE IF NOT EXISTS xp_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            type TEXT NOT NULL,
+            context TEXT NOT NULL,
+            amount INTEGER NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+            UNIQUE(user_id, type, context)
+        )`
+    );
+
+    db.run(
+        `CREATE TABLE IF NOT EXISTS referrals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            referrer_id TEXT NOT NULL,
+            referred_id TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(referrer_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY(referred_id) REFERENCES users(id) ON DELETE CASCADE,
+            UNIQUE(referrer_id, referred_id)
+        )`
+    );
+
     const safeAlter = (sql: string) => {
         db.run(sql, (err) => {
             if (err && !err.message.includes('duplicate column name')) {
@@ -193,6 +218,7 @@ db.serialize(() => {
     safeAlter(
         `ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0`
     );
+    safeAlter(`ALTER TABLE users ADD COLUMN xp_total INTEGER NOT NULL DEFAULT 0`);
     db.run(
         `UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE last_active IS NULL`,
         (err) => {

@@ -38,3 +38,43 @@ export interface Match {
 export interface MapPreferences {
     banned: Record<string, string[]>;
 }
+
+export interface XpBreakdownEntry {
+    type: string;
+    amount: number;
+}
+
+export interface XpSummary {
+    total: number;
+    delta: number;
+    breakdown?: XpBreakdownEntry[];
+}
+
+export interface MatchSaveResponse {
+    match: Match;
+    xp?: XpSummary;
+}
+
+export interface PlayerMutationResponse {
+    player: Player;
+    xp?: XpSummary;
+}
+
+export interface XpSnapshot {
+    xp: number;
+}
+
+export interface XpEventResponse {
+    xp?: XpSummary;
+}
+
+export interface XpRewards {
+    matchBase: number;
+    matchMapBonus: number;
+    matchMomentumBonus: number;
+    teamShare: number;
+    matchScreenshot: number;
+    playerCreate: number;
+    playerRemove: number;
+    referralBonus: number;
+}

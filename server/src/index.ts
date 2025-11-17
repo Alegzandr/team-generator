@@ -10,7 +10,9 @@ import playerRoutes from './routes/players';
 import matchRoutes from './routes/matches';
 import userRoutes from './routes/user';
 import mapPreferenceRoutes from './routes/mapPreferences';
+import xpRoutes from './routes/xp';
 import { startRetentionJob } from './services/retentionService';
+import { setupRealtimeServer } from './services/realtimeService';
 import './auth/discordAuth';
 import {
     CLIENT_ORIGIN,
@@ -60,10 +62,13 @@ app.use('/api/players', playerRoutes);
 app.use('/api/matches', matchRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/maps/preferences', mapPreferenceRoutes);
+app.use('/api/xp', xpRoutes);
 
 startRetentionJob();
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () =>
+const server = app.listen(PORT, () =>
     console.log(`Server running on http://localhost:${PORT}`)
 );
+
+setupRealtimeServer(server);

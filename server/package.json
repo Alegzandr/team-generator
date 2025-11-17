@@ -13,6 +13,7 @@
     "license": "ISC",
     "type": "commonjs",
     "dependencies": {
+        "@types/ws": "^8.18.1",
         "bcryptjs": "^3.0.2",
         "cookie-parser": "^1.4.7",
         "cors": "^2.8.5",
@@ -23,7 +24,8 @@
         "memorystore": "^1.6.7",
         "passport": "^0.7.0",
         "passport-discord": "^0.1.4",
-        "sqlite3": "^5.1.7"
+        "sqlite3": "^5.1.7",
+        "ws": "^8.18.3"
     },
     "devDependencies": {
         "@types/bcryptjs": "^2.4.6",

@@ -60,10 +60,11 @@ export const createPlayer = async (
 };
 
 export const deletePlayer = async (userId: string, playerId: number) => {
-    await runQuery(`DELETE FROM players WHERE id = ? AND user_id = ?`, [
+    const result = await runQuery(`DELETE FROM players WHERE id = ? AND user_id = ?`, [
         playerId,
         userId,
     ]);
+    return (result.changes ?? 0) > 0;
 };
 
 export const updatePlayer = async (
