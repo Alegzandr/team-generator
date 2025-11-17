@@ -11,7 +11,7 @@ const ToastStack = () => {
     const { toasts, dismissToast } = useToast();
 
     return (
-        <div className="pointer-events-none fixed right-4 top-4 z-[9999] flex flex-col gap-3">
+        <div className="pointer-events-none fixed bottom-4 right-4 z-[9999] flex flex-col items-end gap-3">
             {toasts.map((toast) => (
                 <div
                     key={toast.id}

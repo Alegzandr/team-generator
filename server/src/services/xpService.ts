@@ -5,7 +5,6 @@ import { emitXpUpdate } from './realtimeService';
 const XP_VALUES = {
     MATCH_BASE: 50,
     MATCH_MAP_BONUS: 20,
-    MATCH_MOMENTUM_BONUS: 15,
     TEAM_SHARE: 15,
     MATCH_SCREENSHOT: 12,
     PLAYER_CREATE: 8,
@@ -147,7 +146,7 @@ export const awardMatchCompletionXp = async (
     userId: string,
     networkId: string,
     matchId: number,
-    options: { mapSelection?: boolean; momentum?: boolean }
+    options: { mapSelection?: boolean }
 ) => {
     const events: EventDescriptor[] = [
         {
@@ -161,13 +160,6 @@ export const awardMatchCompletionXp = async (
             amount: XP_VALUES.MATCH_MAP_BONUS,
             type: 'match:map',
             context: `match:${matchId}:map`,
-        });
-    }
-    if (options.momentum) {
-        events.push({
-            amount: XP_VALUES.MATCH_MOMENTUM_BONUS,
-            type: 'match:momentum',
-            context: `match:${matchId}:momentum`,
         });
     }
     return runEventsForNetwork(networkId, userId, events);
@@ -327,7 +319,6 @@ export const awardNetworkDepartureXp = async (
 export const getXpRewards = () => ({
     matchBase: XP_VALUES.MATCH_BASE,
     matchMapBonus: XP_VALUES.MATCH_MAP_BONUS,
-    matchMomentumBonus: XP_VALUES.MATCH_MOMENTUM_BONUS,
     teamShare: XP_VALUES.TEAM_SHARE,
     matchScreenshot: XP_VALUES.MATCH_SCREENSHOT,
     playerCreate: XP_VALUES.PLAYER_CREATE,

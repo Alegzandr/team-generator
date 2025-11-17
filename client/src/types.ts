@@ -102,7 +102,6 @@ export interface XpEventResponse {
 export interface XpRewards {
     matchBase: number;
     matchMapBonus: number;
-    matchMomentumBonus: number;
     teamShare: number;
     matchScreenshot: number;
     playerCreate: number;

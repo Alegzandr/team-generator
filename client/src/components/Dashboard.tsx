@@ -53,6 +53,7 @@ const DASHBOARD_SETTINGS_KEY = 'team-generator:dashboard-settings';
 const PLAYERS_PAGE_SIZE = 20;
 const createDefaultMapPreferences = (): MapPreferences => ({ banned: {} });
 const NETWORK_LEAVE_CODE = 'leave';
+const KICK_CONFIRM_CODE = 'KICK';
 
 type DragPayload =
     | { type: 'team'; from: 'teamA' | 'teamB'; player: TeamPlayer }
@@ -132,17 +133,21 @@ const formatRequestDate = (value: string) => {
 
 const calculateMomentumMap = (
     matches: Match[],
-    options?: { filterGame?: string | null }
+    options?: { filterGame?: string | null; after?: number }
 ) => {
     const now = Date.now();
     const map: Record<string, number> = {};
     const filterGame = options?.filterGame;
+    const afterTimestamp = options?.after ?? 0;
 
     matches.forEach((match) => {
         if (filterGame && match.game !== filterGame) {
             return;
         }
         const playedAt = new Date(match.created_at).getTime();
+        if (afterTimestamp && playedAt < afterTimestamp) {
+            return;
+        }
         if (now - playedAt > MOMENTUM_WINDOW_MS) {
             return;
         }
@@ -315,8 +320,8 @@ const Dashboard = () => {
     const [playersHasMore, setPlayersHasMore] = useState(true);
     const [matches, setMatches] = useState<Match[]>([]);
     const [matchesLoading, setMatchesLoading] = useState(false);
-    const [momentumEnabled, setMomentumEnabled] = useState(
-        storedSettings.momentumEnabled !== false
+    const [momentumResetAfter, setMomentumResetAfter] = useState<number>(
+        typeof storedSettings.momentumResetAfter === 'number' ? storedSettings.momentumResetAfter : 0
     );
     const [mapSelectionEnabled, setMapSelectionEnabled] = useState(
         Boolean(storedSettings.mapSelectionEnabled)
@@ -342,6 +347,7 @@ const Dashboard = () => {
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [notificationsLoading, setNotificationsLoading] = useState(false);
     const [notificationsOpen, setNotificationsOpen] = useState(false);
+    const [bellPulse, setBellPulse] = useState(false);
     const [networkHidden, setNetworkHidden] = useState(false);
     const [playerName, setPlayerName] = useState('');
     const [playerSkill, setPlayerSkill] = useState(5);
@@ -396,7 +402,6 @@ const Dashboard = () => {
     const matchScreenshotCache = useRef<Set<number>>(new Set());
     const referralClaimingRef = useRef(false);
     const [copyingShareLink, setCopyingShareLink] = useState(false);
-    const [shareStatus, setShareStatus] = useState<'idle' | 'copied' | 'error'>('idle');
     const [deleteModalOpen, setDeleteModalOpen] = useState(false);
     const [deleteConfirmation, setDeleteConfirmation] = useState('');
     const [deleteSubmitting, setDeleteSubmitting] = useState(false);
@@ -421,6 +426,8 @@ const Dashboard = () => {
     const [leaveConfirm, setLeaveConfirm] = useState('');
     const [leaveModalOpen, setLeaveModalOpen] = useState(false);
     const [kickInProgressId, setKickInProgressId] = useState<string | null>(null);
+    const [kickConfirmMember, setKickConfirmMember] = useState<NetworkMember | null>(null);
+    const [kickConfirmText, setKickConfirmText] = useState('');
     const [momentumHighlights, setMomentumHighlights] = useState<Set<string>>(new Set());
     const [recentMatchHighlights, setRecentMatchHighlights] = useState<Set<number>>(
         new Set()
@@ -433,10 +440,11 @@ const Dashboard = () => {
 
     const momentumMap = useMemo(
         () =>
-            momentumEnabled
-                ? calculateMomentumMap(matches, { filterGame: activeMomentumGame })
-                : {},
-        [matches, momentumEnabled, activeMomentumGame]
+            calculateMomentumMap(matches, {
+                filterGame: activeMomentumGame,
+                after: momentumResetAfter,
+            }),
+        [matches, activeMomentumGame, momentumResetAfter]
     );
     const mapOptions = useMemo<string[]>(
         () => [...(MAP_POOL[selectedGame] ?? [])],
@@ -450,6 +458,12 @@ const Dashboard = () => {
         () => notifications.filter((notification) => !notification.isRead).length,
         [notifications]
     );
+    useEffect(() => {
+        if (unreadNotifications < 0) return;
+        setBellPulse(true);
+        const timer = window.setTimeout(() => setBellPulse(false), 600);
+        return () => window.clearTimeout(timer);
+    }, [unreadNotifications]);
     const badgesVisible = Boolean(user?.badgesVisibleInSearch);
     const canKickMembers = useMemo(
         () =>
@@ -939,7 +953,6 @@ const Dashboard = () => {
     const handleShareInvite = async () => {
         if (!user || copyingShareLink) return;
         setCopyingShareLink(true);
-        setShareStatus('idle');
         try {
             const target = new URL(window.location.href);
             target.searchParams.set('invite', user.id);
@@ -956,10 +969,10 @@ const Dashboard = () => {
                 document.execCommand('copy');
                 document.body.removeChild(textarea);
             }
-            setShareStatus('copied');
+            pushToast(t('xp.shareCopied'), 'success');
         } catch (error) {
             console.error('Failed to copy share link', error);
-            setShareStatus('error');
+            pushToast(t('xp.shareError'), 'error');
         } finally {
             setCopyingShareLink(false);
         }
@@ -1198,6 +1211,7 @@ const Dashboard = () => {
                         applyXpSummary(data.payload as XpSummary);
                     } else if (data?.type === 'social:update') {
                         refreshNetworkState();
+                        fetchNotifications();
                     } else if (data?.type === 'sync') {
                         if (data.scope === 'players') {
                             fetchPlayers(true);
@@ -1205,6 +1219,7 @@ const Dashboard = () => {
                             fetchMatches();
                         } else if (data.scope === 'network' || data.scope === 'requests') {
                             refreshNetworkState();
+                            fetchNotifications();
                         } else if (data.scope === 'notifications') {
                             fetchNotifications();
                         }
@@ -1280,6 +1295,8 @@ const Dashboard = () => {
                 }
                 handleXpEnvelope(response);
                 pushToast(t('network.memberKicked'), 'info');
+                setKickConfirmMember(null);
+                setKickConfirmText('');
             } catch (error) {
                 const message =
                     error instanceof ApiError && error.status === 403
@@ -1411,7 +1428,7 @@ const Dashboard = () => {
             mapSelectionEnabled,
             selectedGame,
             selectedMap,
-            momentumEnabled,
+            momentumResetAfter,
         });
     }, [
         teamNames,
@@ -1419,7 +1436,7 @@ const Dashboard = () => {
         mapSelectionEnabled,
         selectedGame,
         selectedMap,
-        momentumEnabled,
+        momentumResetAfter,
     ]);
 
     useEffect(() => {
@@ -1465,35 +1482,26 @@ const Dashboard = () => {
         };
     }, [momentumMap]);
 
+    const handleResetMomentum = useCallback(() => {
+        const timestamp = Date.now();
+        setMomentumResetAfter(timestamp);
+        momentumMapRef.current = {};
+        setMomentumHighlights(new Set());
+    }, []);
+
     useEffect(() => {
         if (typeof window === 'undefined') return;
-        let lastY = window.scrollY;
-        let ticking = false;
-
-        const handleScroll = () => {
-            const process = () => {
-                const currentY = window.scrollY;
-                const delta = currentY - lastY;
-                if (currentY < 24) {
-                    setNetworkHidden(false);
-                } else if (delta > 8) {
-                    setNetworkHidden(true);
-                } else if (delta < -8) {
-                    setNetworkHidden(false);
-                }
-                lastY = currentY;
-                ticking = false;
-            };
-
-            if (!ticking) {
-                window.requestAnimationFrame(process);
-                ticking = true;
-            }
+        const syncHeader = () => {
+            const shouldHide = !networkPanelOpen && window.scrollY > 8;
+            setNetworkHidden((prev) => (prev === shouldHide ? prev : shouldHide));
         };
-
+        syncHeader();
+        const handleScroll = () => {
+            window.requestAnimationFrame(syncHeader);
+        };
         window.addEventListener('scroll', handleScroll, { passive: true });
         return () => window.removeEventListener('scroll', handleScroll);
-    }, []);
+    }, [networkPanelOpen]);
 
     useEffect(() => {
         if (!notificationsOpen) return;
@@ -1787,11 +1795,7 @@ const Dashboard = () => {
         if (!payload) return;
 
         if (payload.type === 'saved') {
-            const fromIndex = players.findIndex((player) => player.id === payload.playerId);
-            if (fromIndex === -1) return;
-            const toIndex =
-                targetIndex === undefined ? players.length - 1 : Math.max(0, targetIndex);
-            setPlayers((prev) => reorderList(prev, fromIndex, toIndex));
+            return;
         } else if (payload.type === 'temporary') {
             await convertTemporaryToSaved(payload.tempId, targetIndex);
         }
@@ -2044,7 +2048,6 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                     status,
                     features: {
                         mapSelection: mapSelectionEnabled,
-                        momentum: momentumEnabled,
                     },
                 }),
             });
@@ -2398,7 +2401,9 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                                     }
                                     setNotificationsOpen((prev) => !prev);
                                 }}
-                                className="relative flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-white/5 text-xl transition hover:border-cyan-400/50 hover:shadow-[0_10px_25px_rgba(0,246,255,0.25)]"
+                                className={`relative flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-white/5 text-xl transition hover:border-cyan-400/50 hover:shadow-[0_10px_25px_rgba(0,246,255,0.25)] ${
+                                    bellPulse ? 'animate-pulse' : ''
+                                }`}
                                 aria-label={t('notifications.title')}
                             >
                                 <FiBell
@@ -2598,7 +2603,10 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                                             {canKickMembers && member.id !== user?.id && (
                                                 <button
                                                     type="button"
-                                                    onClick={() => handleKickMember(member.id)}
+                                                    onClick={() => {
+                                                        setKickConfirmMember(member);
+                                                        setKickConfirmText('');
+                                                    }}
                                                     disabled={kickInProgressId === member.id}
                                                     className="rounded-full border border-rose-400/50 bg-rose-500/10 px-3 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-rose-100 transition hover:border-rose-300/80 disabled:opacity-60"
                                                 >
@@ -3282,35 +3290,22 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                         <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                             <div>
                                 <p className="text-xs tracking-[0.15em] text-slate-200">
-                                    {t('players.momentumToggleLabel')}
+                                    {t('players.momentumResetLabel')}
                                 </p>
                                 <p className="text-sm text-slate-200">
-                                    {momentumEnabled
-                                        ? mapSelectionEnabled
-                                            ? t('players.momentumFiltered', { game: selectedGame })
-                                            : t('players.momentumEnabled')
-                                        : t('players.momentumDisabled')}
+                                    {mapSelectionEnabled
+                                        ? t('players.momentumResetDescriptionFiltered', {
+                                              game: selectedGame,
+                                          })
+                                        : t('players.momentumResetDescription')}
                                 </p>
                             </div>
                             <button
                                 type="button"
-                                disabled={teamsLocked}
-                                onClick={() => {
-                                    if (teamsLocked) {
-                                        notifyTeamsLocked();
-                                        return;
-                                    }
-                                    setMomentumEnabled((prev) => !prev);
-                                }}
-                                className={`rounded-full border px-4 py-2 text-xs font-semibold tracking-[0.12em] uppercase transition ${
-                                    momentumEnabled
-                                        ? 'border-[#ff5c8a]/40 bg-[#ff5c8a]/20 text-white shadow-[0_4px_16px_rgba(255,92,138,0.25)]'
-                                        : 'border-white/15 bg-white/5 text-slate-200 hover:border-white/40 hover:text-white'
-                                } disabled:cursor-not-allowed disabled:opacity-60`}
+                                onClick={handleResetMomentum}
+                                className="valorant-btn-outline px-4 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
                             >
-                                {momentumEnabled
-                                    ? t('players.momentumDisable')
-                                    : t('players.momentumEnable')}
+                                {t('players.momentumReset')}
                             </button>
                         </div>
                     </div>
@@ -3526,14 +3521,6 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                                         onHide={hideXpTooltip}
                                     />
                                 )}
-                                {momentumEnabled && (
-                                    <XpDot
-                                        label={t('xp.momentumBonus')}
-                                        value={xpRewards?.matchMomentumBonus}
-                                        onShow={showXpTooltip}
-                                        onHide={hideXpTooltip}
-                                    />
-                                )}
                             </div>
                         </div>
                     </div>
@@ -3660,6 +3647,50 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                 onClose={() => setResultModalOpen(false)}
                 onConfirm={handleModalConfirm}
             />
+            {kickConfirmMember && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-6">
+                    <div className="w-full max-w-md rounded-3xl border border-white/10 bg-[#0f101a] p-6 text-white shadow-2xl">
+                        <h3 className="text-xl font-semibold">{t('network.kickConfirmTitle')}</h3>
+                        <p className="mt-2 text-sm text-slate-200">
+                            {t('network.kickConfirmDescription', {
+                                code: KICK_CONFIRM_CODE,
+                                name: formatUsername(kickConfirmMember.username),
+                            })}
+                        </p>
+                        <input
+                            className="valorant-input mt-4 w-full uppercase"
+                            placeholder={t('network.kickPlaceholder')}
+                            value={kickConfirmText}
+                            onChange={(event) => setKickConfirmText(event.target.value.toUpperCase())}
+                        />
+                        <div className="mt-4 flex gap-3">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setKickConfirmMember(null);
+                                    setKickConfirmText('');
+                                }}
+                                className="valorant-btn-outline w-full px-4 py-2 text-xs"
+                            >
+                                {t('actions.cancel')}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => handleKickMember(kickConfirmMember.id)}
+                                disabled={
+                                    kickConfirmText.trim().toUpperCase() !== KICK_CONFIRM_CODE ||
+                                    kickInProgressId === kickConfirmMember.id
+                                }
+                                className="valorant-btn-primary w-full px-4 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                {kickInProgressId === kickConfirmMember.id
+                                    ? t('actions.saving')
+                                    : t('actions.confirm')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
             {leaveModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-6">
                     <div className="w-full max-w-md rounded-3xl border border-white/10 bg-[#0f101a] p-6 text-white shadow-2xl">
@@ -3787,12 +3818,6 @@ const copyElementToClipboard = async (element: HTMLElement) => {
                             onHide={hideXpTooltip}
                         />
                     </div>
-                    {shareStatus === 'copied' && (
-                        <p className="text-xs text-emerald-300">{t('xp.shareCopied')}</p>
-                    )}
-                    {shareStatus === 'error' && (
-                        <p className="text-xs text-rose-300">{t('xp.shareError')}</p>
-                    )}
                 </div>
                 <div className="flex flex-wrap gap-3">
                     <button
@@ -3829,7 +3854,7 @@ type DashboardSettings = {
     mapSelectionEnabled: boolean;
     selectedGame: GameTitle;
     selectedMap: string | null;
-    momentumEnabled: boolean;
+    momentumResetAfter: number;
 };
 
 type PlayersResponse = {

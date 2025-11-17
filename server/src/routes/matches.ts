@@ -63,7 +63,6 @@ router.post('/', async (req, res) => {
 
     const normalizedFeatures = {
         mapSelection: Boolean(features?.mapSelection),
-        momentum: Boolean(features?.momentum),
     };
 
     try {
