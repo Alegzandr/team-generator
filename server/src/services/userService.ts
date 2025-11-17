@@ -25,13 +25,13 @@ export const upsertUser = async (user: UserUpsertInput) => {
     await runQuery(`INSERT OR IGNORE INTO networks (id) VALUES (?)`, [user.id]);
     await runQuery(
         `
-        INSERT INTO users (id, username, avatar, network_id)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO users (id, username, avatar, network_id, network_joined_at)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(id) DO UPDATE SET
             username = excluded.username,
             avatar = excluded.avatar,
             last_active = CURRENT_TIMESTAMP
-`,
+    `,
         [user.id, user.username, user.avatar, user.id]
     );
 

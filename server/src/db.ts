@@ -446,13 +446,28 @@ db.serialize(() => {
         )`
     );
 
-    const safeAlter = (sql: string) => {
-        db.run(sql, (err) => {
-            if (err && !err.message.includes('duplicate column name')) {
-                console.error(`Failed to run migration "${sql}":`, err.message);
-            }
-        });
-    };
+const safeAlter = (sql: string, fallbackSql?: string) => {
+    db.run(sql, (err) => {
+        if (!err || err.message.includes('duplicate column name')) {
+            return;
+        }
+        if (fallbackSql && err.message.toLowerCase().includes('non-constant default')) {
+            db.run(fallbackSql, (fallbackErr) => {
+                if (
+                    fallbackErr &&
+                    !fallbackErr.message.includes('duplicate column name')
+                ) {
+                    console.error(
+                        `Failed to run fallback migration "${fallbackSql}":`,
+                        fallbackErr.message
+                    );
+                }
+            });
+            return;
+        }
+        console.error(`Failed to run migration "${sql}":`, err.message);
+    });
+};
 
     safeAlter(
         `ALTER TABLE users ADD COLUMN last_active DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`
@@ -463,7 +478,8 @@ db.serialize(() => {
     safeAlter(`ALTER TABLE users ADD COLUMN xp_total INTEGER NOT NULL DEFAULT 0`);
     safeAlter(`ALTER TABLE users ADD COLUMN network_id TEXT`);
     safeAlter(
-        `ALTER TABLE users ADD COLUMN network_joined_at DATETIME DEFAULT CURRENT_TIMESTAMP`
+        `ALTER TABLE users ADD COLUMN network_joined_at DATETIME DEFAULT CURRENT_TIMESTAMP`,
+        `ALTER TABLE users ADD COLUMN network_joined_at DATETIME`
     );
     safeAlter(
         `ALTER TABLE users ADD COLUMN badges_visible_in_search INTEGER NOT NULL DEFAULT 0`
